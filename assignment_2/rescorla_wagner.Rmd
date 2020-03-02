@@ -1,0 +1,170 @@
+---
+title: "rescorla_wagner"
+author: "K. Enevoldsen"
+date: "2/26/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+pacman::p_load(pacman, tidyverse, R2jags, modules, patchwork,
+               extraDistr # for extra destributions
+               )
+set.seed(1994)
+agents <- modules::import(module = "../jags_helpfuns/agents", attach = T, doc = T)
+modules::reload(agents)
+qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
+modules::reload(qc)
+jh <- modules::import("../jags_helpfuns/jags_helpfuns", attach = T, doc = T)
+modules::reload(jh)
+```
+
+```{r payoff}
+# generate payoff matrix for bandit task
+  # choice of bandit A - 30% of a payoff 2, otherwise 0
+  # Choice of bandit B - 70% of a payoff 1, otherwise 0
+
+bandit_payoff <- function(ntrials = 100, choice = "a", a_prop = 0.3, a_reward = 2, b_prop = 0.7, b_reward = 1){
+  if (choice == "a"){
+    return(rbinom(ntrials, 1, a_prop)*a_reward)
+  } else if (choice == "b"){
+    return(rbinom(ntrials, 1, b_prop)*b_reward)
+  }
+}
+
+payoff <- cbind(bandit_payoff(choice = "a"), bandit_payoff(choice = "b"))
+```
+
+
+```{r jags models rb} 
+model <- "model {
+  theta ~ dunif(0, 1)
+  b[1] <- theta
+  b[2] <- 1-theta
+  
+  for (t in 1:n_trials){
+    choices[t] ~ dcat(b) # categorical distribution
+  }
+}
+"
+
+writeLines(model, "RB_jags.txt")
+```
+
+
+# sim an fit RB
+```{r sim}
+rb_sim <- agents$RB(theta = 0.7, ntrials = 100, payoff = payoff)
+rb_sim
+
+
+# fit
+samples <- jags.parallel(data = list(choices = rb_sim$choices, n_trials = length(rb_sim$choices)), 
+                inits = NULL, 
+                parameters.to.save = c("theta"), 
+                model.file = "RB_jags.txt",
+                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                )
+
+qc$plot_dens(x = samples$BUGSoutput$sims.list$theta)
+qc$plot_scatter(x = samples$BUGSoutput$sims.list$theta)
+# qc$plot_dens_gif(x = samples$BUGSoutput$sims.list$theta)
+```
+
+
+# parameters recovery RB
+```{r}
+n_reps = 10
+
+res <- NULL
+for (i in 1:n_reps){
+  print(paste("Curenntly running", i, "out of", n_reps, sep = " "))
+    # sim
+  theta = runif(1, 0, 1)
+  rb_sim <- agents$RB(theta = theta, ntrials = 100, payoff = payoff)
+  
+    # fit
+  samples <- jags.parallel(data = list(choices = rb_sim$choices, n_trials = length(rb_sim$choices)), 
+                inits = NULL, 
+                parameters.to.save = c("theta"), 
+                model.file = "RB_jags.txt",
+                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                )
+  
+  tmp <- tibble(theta_true = theta, map_theta = jh$jag_map(samples$BUGSoutput$sims.list$theta))
+  
+  res[[i]] <- tmp
+}
+results <- res %>% do.call(rbind, .)
+
+plot(results$theta_true, results$map_theta)
+qc$plot_actual_predicted(actual = results$theta_true, results$map_theta)
+```
+
+
+```{r}
+payoff <- cbind(bandit_payoff(ntrials = 100, choice = "a", a_prop = .3, a_reward = 2), 
+                bandit_payoff(ntrials = 100, choice = "b", b_prop = .8, b_reward = 1.5))
+
+```
+
+```{r jags models rw}
+model <- "model {
+  
+    # infer starting parameters
+  Q[1,1] ~ dt(0, .16, 1)T(0,) # half cauchy
+  Q[1,2] ~ dt(0, .16, 1)T(0,)
+  
+    # infer internal states
+  alpha  ~ dunif(0,1)
+  beta ~ dt(0, .16, 1)T(0,)
+  
+  for (t in 2:n_trials){
+    for (k in 1:2){
+      # update utility Q for chosen option with reward on last trials
+      Q_update[t, k] <- Q[t-1, k] + alpha*(r[t-1] - Q[t-1, k])
+      Q[t, k] <- ifelse(k==choice[t-1], Q_update[t, k], Q[t-1, k])
+      exp_p[t, k] <- exp(beta*Q[t,k])
+    }
+    for (k in 1:2){
+      p[t,k] <- exp_p[t,k]/sum(exp_p[t,])
+    }
+    
+      # make choice
+    choice[t] ~ dcat(p[t,1:2])
+  }
+}"
+
+
+writeLines(model, "rw_jags.txt")
+```
+
+```{r rescorla wagner sim}
+  # sim
+res <- agents$rw(payoff, alpha = 0.3, beta = 2)
+
+samples <- jags.parallel(data = list(choice = res$choice, n_trials = length(res$choice), r = res$reward), 
+                inits = NULL, 
+                parameters.to.save = c("alpha", "beta"), 
+                model.file = "rw_jags.txt",
+                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                )
+
+qc$plot_agent_rw(alpha_sample = samples$BUGSoutput$sims.list$alpha,
+                 true_alpha = 0.3, 
+                 beta_sample = samples$BUGSoutput$sims.list$beta,
+                 true_beta = 2, 
+                 choice = res$choice-1, 
+                 p_1 = res$p[,2], 
+                 reward = res$reward,
+                 Q1 = res$Q[,1], 
+                 Q2 = res$Q[,2])
+```
+
+
+
+
+
+
+

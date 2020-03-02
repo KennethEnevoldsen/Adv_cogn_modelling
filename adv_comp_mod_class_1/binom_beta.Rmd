@@ -1,0 +1,207 @@
+---
+title: "binomial_bera_model"
+author: "K. Enevoldsen"
+date: "2/17/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+This script intends to build a model for a chicken sexer.
+
+
+```{r setup}
+# Clear environment, load packages and set seed
+rm(list = ls())
+pacman::p_load(pacman, tidyverse, rjags, R2jags)
+set.seed(1994)
+# setwd("")
+
+```
+
+# Model 1
+```{r model 1 fixed theta model}
+
+n_agents <- 1
+n_trials <- 100
+g_fixed <- array(0, c(n_agents, n_trials))
+theta <- .7
+
+for (t in 1:n_trials){
+  g_fixed[t] <- rbinom(1, 1,  prob = theta)
+}
+```
+
+# Model 2
+```{r model 2 learning model}
+g_learn <- array(0, c(n_agents, n_trials))
+theta <- array(0, c(n_agents, n_trials))
+alpha <- .05     # learning rate 
+theta_init <- .5 # starting theta (skill)
+
+theta[1] <- theta_init
+for (t in 2:n_trials){
+  theta[t] <- (theta[t-1])^(1/(1+alpha))
+  g_learn[t] <- rbinom(1, 1,  prob = theta[t])
+}
+
+plot(as.numeric(g_learn))
+plot(as.numeric(theta), type = "l")
+```
+
+# create jags model and write them to txt
+```{r create jags models}
+# Model in the JAGS format
+model <- "model { 
+  # sample from beta dist
+  theta ~ dbeta(1, 1)
+  
+  for (t in 1:n_trials){
+  # sample from binomial dist
+  g[t] ~ dbin(theta, 1)
+  }
+}"
+
+writeLines(model, "chick_model.txt")
+
+# Model in the JAGS format
+model <- "model { 
+  # sample from a normal distribution and truncate the the distribution from 0 to 1
+  alpha ~ dnorm(.5, .01)T(0, 1)
+  theta1 ~ dnorm(.5, .01)T(0, 1)
+  
+  theta[1] <- theta1
+  for (t in 2:n_trials){
+    theta[t] <- (theta[t-1])^(1/(1+alpha))
+    g[t] ~ dbin(theta[t], 1)
+  }
+}"
+
+writeLines(model, "chick_learn_model.txt")
+```
+
+# run inference for the fixed model using the learning data
+```{r}
+g <- g_learn[1,]
+data <- list("g", "n_trials", "theta_init")
+params <- c("theta")
+samples <- jags.parallel(data = data, 
+                inits = NULL, 
+                parameters.to.save = params, 
+                model.file = "chick_model.txt",
+                n.chains = 8, n.iter = 10000, n.burnin = 3000 # warm-up
+                )
+
+traceplot(samples)
+theta_d <- samples$BUGSoutput$sims.list$theta
+plot(density(theta_d))
+```
+
+# run inference for the fixed model using the fixed data
+```{r}
+g <- g_learn[1,]
+theta1 <- theta_init
+
+data <- list("g", "n_trials")
+params <- c("alpha", "theta1", "theta")
+samples <- jags.parallel(data = data, 
+                inits = NULL, 
+                parameters.to.save = params, 
+                model.file = "chick_learn_model.txt",
+                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                )
+
+# traceplot(samples)
+theta <- samples$BUGSoutput$sims.list$theta
+plot(density(theta[,100])) # thee distribution of time t==1
+
+# get the maximum posterior
+jag_map <- function(param_samples){
+  dens <- density(param_samples)
+  return(dens$x[dens$y == max(dens$y)])
+}
+alpha_post <- samples$BUGSoutput$sims.list$alpha
+jag_map(alpha_post)
+
+theta <- samples$BUGSoutput$sims.list$theta
+map_theta <- apply(as.data.frame(theta), 2, FUN = jag_map)
+plot(map_theta)
+
+```
+
+
+```{r gif sideproject}
+theta_df <- theta %>% 
+  as.tibble() %>% 
+  melt(variable = "Trial", value.name  = "theta") %>% 
+  mutate(Trial = as.numeric(str_extract(Trial, "\\d+")))
+  
+
+# devtools::install_github('thomasp85/gganimate')
+# devtools::install_github('thomasp85/transformr')
+pacman::p_load(tidyverse, gapminder, gganimate, reshape2, av)
+
+gif <- ggplot(data = theta_df, aes(x = theta)) + 
+  geom_density(alpha = 0.9, color = NA, fill = "lightsteelblue") + 
+  labs(title = 'Trial {frame_time}', x = 'Estimated theta (skill of the chicken sexer)', y = 'Density') +
+  theme_bw() +
+  theme(panel.border = element_blank()) + 
+  transition_time(Trial)
+gif <- gif +  coord_cartesian(ylim=c(0, 15))
+anim_save("learning.mp4", animation = gif, renderer = av_renderer()) # save as mp4
+anim_save("learning2.mp4", animation = gif, renderer =ffmpeg_renderer()) 
+anim_save("learning.GIF", animation = gif) # save af gif
+ffmpeg_renderer()
+```
+
+
+
+
+
+# Joshua's new file - simulating multiple models
+I will just use the same file
+```{r}
+n_sim = 20
+trueAlpha = array(0, c(n_sim))
+InferredAlpha = array(c(n_sim))
+
+
+gen_data_m1 <- function(n_trials, alpha = runif(1,0,1), theta_init = runif(1,0,1)){
+  g_learn <- array(0, c(n_trials))
+  theta <- array(0, c(n_trials))
+  
+  theta[1] <- theta_init
+  for (t in 2:n_trials){
+    theta[t] <- (theta[t-1])^(1/(1+alpha))
+    g_learn[t] <- rbinom(1, 1,  prob = theta[t])
+  }
+  return(g_learn)
+}
+
+
+n_trials = 100
+for (i in 1:n_sim){
+  print(paste("currently at sim", i))
+  # generate data
+  alpha = runif(1,0,1)
+  theta_init = runif(1,0,1)
+  g_learn <- gen_data_m1(n_trials, alpha, theta_init)
+  
+  # estimate parameters
+  samples <- jags.parallel(data = list(g = g_learn, n_trials = n_trials), 
+                inits = NULL, 
+                parameters.to.save = c("alpha", "theta1", "theta"), 
+                model.file = "chick_learn_model.txt",
+                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                )
+  alpha_post <- samples$BUGSoutput$sims.list$alpha
+  InferredAlpha[i] <- jag_map(alpha_post)
+  trueAlpha[i] <- alpha
+}
+plot(InferredAlpha, trueAlpha) # true vs inferred
+samples$BUGSoutput$DIC
+
+```
+
+
+# lastly fit model to data generated by the other model
+trivial
