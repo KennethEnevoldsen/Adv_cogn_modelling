@@ -14,7 +14,8 @@
 #'@references
 #'
 #'@export
-RB <- function(theta, ntrials = 100, payoff){
+RB <- function(payoff, theta){
+  ntrials = nrow(payoff)
   b <- c(theta, 1-theta)
   choices <- array(0, c(ntrials))
   reward <- array(0, c(ntrials))
@@ -64,7 +65,7 @@ rw <- function(payoff, alpha, beta){
   Q[1,1] <- 1
   Q[1,2] <- 1
   
-  choice[1] <- rcat(1, c(0.5, 0.5))
+  choice[1] <- extraDistr::rcat(1, c(0.5, 0.5))
   r[1] <- payoff[1, choice[1]]
   
   for (t in 2:n_trials){
