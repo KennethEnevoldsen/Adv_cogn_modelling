@@ -1,0 +1,201 @@
+---
+title: "binomial_bera_model"
+author: "K. Enevoldsen"
+date: "2/17/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup}
+# Clear environment, load packages and set seed
+rm(list = ls())
+pacman::p_load(pacman, tidyverse, rjags, R2jags, modules, yardstick)
+set.seed(1994)
+# setwd("")
+
+jh <- modules::import("jags_helpfuns", attach = T, doc = T)
+modules::reload(jh) # this simply reloads the module in case of any changes
+```
+
+# Simulation
+We will start of by making two simulations, one with and one without learning
+```{r sim}
+# Simulations model without learning
+gen_data_fixed <- function(n_trials = 100 , alpha = runif(1,0,1), theta = runif(1,0.5,1)){
+  g_fixed <- array(0, c(n_trials))
+  
+  for (t in 1:n_trials){
+    g_fixed[t] <- rbinom(1, 1,  prob = theta)
+  }
+  return(g_fixed)
+}
+
+# Simulations model with learning
+gen_data_learning <- function(n_trials = 100, alpha = runif(1,0,1), theta_init = runif(1,.5,1)){
+  g_learn <- array(0, c(n_trials))
+  theta <- array(0, c(n_trials))
+  
+  theta[1] <- theta_init
+  for (t in 2:n_trials){
+    theta[t] <- (theta[t-1])^(1/(1+alpha))
+    g_learn[t] <- rbinom(1, 1,  prob = theta[t])
+  }
+  return(g_learn)
+}
+```
+
+# Create jags model
+Create jags model and write them to .txt
+```{r create jags models}
+# Model in the JAGS format
+model <- "model { 
+  # sample from beta dist
+  theta ~ dbeta(1, 1)
+  
+  for (t in 1:n_trials){
+  # sample from binomial dist
+  g[t] ~ dbin(theta, 1)
+  }
+}"
+
+writeLines(model, "chick_model.txt")
+
+# Model in the JAGS format
+model <- "model { 
+  # sample from a normal distribution and truncate the the distribution from 0 to 1
+  alpha ~ dnorm(.5, .01)T(0, 1)
+  theta1 ~ dnorm(.5, .01)T(0, 1)
+  
+  theta[1] <- theta1
+  for (t in 2:n_trials){
+    theta[t] <- (theta[t-1])^(1/(1+alpha))
+    g[t] ~ dbin(theta[t], 1)
+  }
+}"
+
+writeLines(model, "chick_learn_model.txt")
+```
+
+
+# Defines function for simulating data, fiting to data and getting best model using BIC
+```{r}
+sim_data <- function(n_trials = 100, data_to_fit = "fixed"){
+  if ("fixed" == data_to_fit){
+    theta =  runif(1,0,1)
+    sim = gen_data_fixed(n_trials, alpha, theta)
+    true_val = list(theta = theta)
+  } else if ("learning" %in% data_to_fit){
+    alpha = runif(1,0,1)
+    theta_init = runif(1,.5,1)
+    sim = gen_data_learning(n_trials, alpha, theta_init)
+    true_val = list(alpha = alpha, theta = theta_init)
+  }
+  return(list(sim_data = sim, true_val = true_val))
+}
+
+fit_to_data <-  function(data_to_fit, n_trials = 100, model_file =  "chick_model.txt", params = c("theta")){
+  # fit 
+  samples <- jags.parallel(data = list(g = data_to_fit, n_trials = n_trials), 
+                inits = NULL, 
+                parameters.to.save = params, 
+                model.file = model_file,
+                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                )
+  return(samples)
+}
+
+evaluate_fit <- function(n_trials = 100, n_sim = 1){
+  if (n_sim > 1){
+    L = NULL
+    for (i in 1:n_sim){
+      print(paste("Running Simulation", i, "of", n_sim, sep = " "))
+      L[[i]] <- evaluate_fit(n_trials)
+    }
+    return(do.call(rbind, L))
+  }
+    # run fixed sim
+  sim <- sim_data(n_trials = n_trials, data_to_fit = "fixed")
+  samples_fix <- fit_to_data(sim$sim_data, n_trials = n_trials, model_file = "chick_model.txt", 
+                         params = c("theta"))
+  samples_learn <- fit_to_data(sim$sim_data, n_trials = n_trials, model_file = "chick_learn_model.txt", 
+                         params = c("alpha", "theta1", "theta"))
+  
+  res_dic <- data.frame(DIC_fix = samples_fix$BUGSoutput$DIC, DIC_learn = samples_learn$BUGSoutput$DIC, data = "fixed",
+                        fix_map_theta = jh$jag_map(samples_fix$BUGSoutput$sims.list$theta), 
+                        learn_map_theta_init = jh$jag_map(samples_learn$BUGSoutput$sims.list$theta1),
+                        learn_map_alpha = jh$jag_map(samples_learn$BUGSoutput$sims.list$alpha),
+                        true_theta = sim$true_val$theta,
+                        true_theta_init = NA,
+                        true_alpha = NA)
+                        
+                      
+  
+    # run learn sim
+  sim <- sim_data(n_trials = n_trials, data_to_fit = "learning")
+  samples_fix <- fit_to_data(sim$sim_data, n_trials = n_trials, model_file = "chick_model.txt", 
+                         params = c("theta"))
+  samples_learn <- fit_to_data(sim$sim_data, n_trials = n_trials, model_file = "chick_learn_model.txt", 
+                         params = c("alpha", "theta1", "theta"))
+  
+  res_dic <- rbind(res_dic, data.frame(DIC_fix = samples_fix$BUGSoutput$DIC, DIC_learn = samples_learn$BUGSoutput$DIC, data = "learning",
+                        fix_map_theta = jh$jag_map(samples_fix$BUGSoutput$sims.list$theta), 
+                        learn_map_theta_init = jh$jag_map(samples_learn$BUGSoutput$sims.list$theta1),
+                        learn_map_alpha = jh$jag_map(samples_learn$BUGSoutput$sims.list$alpha),
+                        true_theta = NA,
+                        true_theta_init = sim$true_val$theta,
+                        true_alpha = sim$true_val$alpha))
+  return(res_dic)
+}
+
+result <- evaluate_fit(n_trials = 100, n_sim = 100)
+  
+```
+
+```{r}
+res <- result %>% 
+  mutate(best_fit = if_else(DIC_fix < DIC_learn, "fixed", "learning")) %>% 
+  select(true_model = data, best_fit, everything()) %>% 
+  mutate_at(c("true_model", "best_fit"), factor, levels = c("fixed", "learning"))
+
+# plot CM
+cm <- yardstick::conf_mat(data = res, truth = true_model, estimate = best_fit)
+autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low="#D6EAF8",high = "#2E86C1")
+
+# true vs actual
+ggplot(res, aes(x = true_theta, y = fix_map_theta)) + 
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ylim(0,1) + xlim(0,1) + 
+  theme_bw() +
+  theme(panel.border = element_blank()) +
+  labs(x = "True theta", y = "MAP theta")
+
+
+ggplot(res, aes(x = true_theta_init, y = learn_map_theta_init)) + 
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ylim(0,1) + xlim(0,1) + 
+  theme_bw() +
+  theme(panel.border = element_blank()) +
+  labs(x = "True theta at n=1", y = "MAP theta at n=1")
+
+ggplot(res, aes(x = true_alpha, y = learn_map_alpha)) + 
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ylim(0,1) + xlim(0,1) + 
+  theme_bw() +
+  theme(panel.border = element_blank()) +
+  labs(x = "True alpha", y = "MAP alpha")
+```
+
+
+
+
+
+
+
+
+

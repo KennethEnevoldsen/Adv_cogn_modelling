@@ -1,0 +1,9 @@
+model { 
+  # sample from beta dist
+  theta ~ dbeta(1, 1)
+  
+  for (t in 1:n_trials){
+  # sample from binomial dist
+  g[t] ~ dbin(theta, 1)
+  }
+}
