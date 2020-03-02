@@ -150,7 +150,7 @@ samples <- jags.parallel(data = list(choice = res$choice, n_trials = length(res$
                 inits = NULL, 
                 parameters.to.save = c("alpha", "beta"), 
                 model.file = "rw_jags.txt",
-                n.chains = 4, n.iter = 5000, n.burnin = 1000 # warm-up
+                n.chains = 4, n.iter = 2000, n.burnin = 1000 # warm-up
                 )
 
 qc$plot_agent_rw(alpha_sample = samples$BUGSoutput$sims.list$alpha,
@@ -167,111 +167,30 @@ qc$plot_agent_rw(alpha_sample = samples$BUGSoutput$sims.list$alpha,
 
 
 ```{r sim}
-#'@title Bandit payoff
-#'@description
-#'Generate a payoff for an n bandit task, where n is the number of bandits
-#'n is derived from the length of probs and reward
-#'
-#'@param props the probability of reward, can be given as a list should be the same length as reward
-#'@param reward the reward for a given prob
-#'@param loss the expected loss if NULL (default) assumed to be 0
-#'
-#'@author
-#'K. Enevoldsen
-#'
-#'@return 
-#'a matrix of size n_trials x n
-#'
-#'@references
-#'
-#'
-#'@export
-bandit_payoff <- function(n_trials = 100, probs = c(0.3, 0.8), reward = c(1, 1.5), loss = NULL){
-  if (length(probs) != length(reward)){
-    stop("length(probs) != length(reward), which the function assumes, make sure it is the case")
-  } 
-  if (is.null(loss)){
-    loss <- rep(0, length(probs))
-  } else if (length(loss) != length(probs)){
-    stop("length(probs) != length(loss), which the function assumes, make sure it is the case")
-  }
-  
-  res =  array(0, c(n_trials, length(probs)))
-  for (i in 1:length(probs)){
-    res[,i] <- rbinom(n_trials, 1, probs[i])*reward[i]
-    res[,i][res[,i] == 0] = loss [[i]]
-  }
-  return(res)
-}
-bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))
-
-
-#'@title simulate fit and compare your jags models and agents
-#'@description
-#'
-#'
-#'@param todo
-#'
-#'@author
-#'K. Enevoldsen
-#'
-#'@return 
-#'a dataframe
-#'
-#'@references
-#'
-#'
-#'@export
-sim_fit_compare <- function(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 1){
-  if (n_sim > 1){
-    for (i in 1:n_sim){
-      print(paste("Currenty running simulation: ", i, " out of ", n_sim, sep = ""))
-      tmp = sim_fit_compare(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 1)
-      tmp$n_sim = i
-      if (i == 1){
-        res <- tmp
-      } else {
-        res <- rbind(res, tmp)
-      }
-    }
-    return(res)
-  }
-  res = array(0, c(length(agent_funs), length(agent_funs)))
-  res = as.data.frame(res)
-  colnames(res) = names(agent_funs)
-  res$model_fitted_to_data = rep("NA", nrow(res))
-  
-  payoff <- eval(parse(text = payoff_gen_fun))
-  
-  for (a in 1:length(agent_funs)){
-    nam = names(agent_funs[a])
-    print(paste("Currently similating and fitting to agent: ", nam, sep = ""))
-    sim_dat <- eval(parse(text = agent_funs[[a]])) # simulate data
-  
-    # fit each model to data
-    for (i in 1:length(params_to_save)){
-      samples <- jags.parallel(data = list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward), 
-                    inits = NULL, 
-                    parameters.to.save = params_to_save[[i]], 
-                    model.file = model_filepath[[i]],
-                    n.chains = 4, n.iter = 5000, n.burnin = 1000)
-      res[i, nam] <-  samples$BUGSoutput$DIC
-      res$model_fitted_to_data[i] <- names(params_to_save[i])
-    }
-  }
-  return(res)
-}
-
-payoff_gen_fun = "bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))"
+payoff_gen_fun = "jh$bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))"
 agent_funs = list(rw = "agents$rw(payoff, alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))",
                rb = "agents$RB(payoff, theta = runif(1, 0,1))")
 params_to_save = list(rw = c("alpha", "beta"),
                       rb = c("theta"))
 model_filepath = list(rw = "rw_jags.txt",
                       rb = "RB_jags.txt")
-results <- sim_fit_compare(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 100)
 
-results %>% write_csv(., "rw_rb_n_sim_100")
+# just simulate it 100 times
+results <- jh$sim_fit_compare(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 100)
+
+# results %>% write_csv(., "rw_rb_n_sim_100")
+
+res <- results %>% 
+  pivot_longer(cols = c("rw", "rb"), names_to = "gen_model") %>% 
+  pivot_wider(values_from = "value", names_from = "model_fitted_to_data", names_prefix = "fitted_") %>% 
+  mutate(best_fit = if_else(fitted_rw < fitted_rb, "Rescorla-wagner", "Random bias"),
+         gen_model = if_else(gen_model == "rw", "Rescorla-wagner", "Random bias")) %>% 
+  mutate_at(c("gen_model", "best_fit"), factor, levels = c("Rescorla-wagner", "Random bias")) 
+
+# plot CM
+cm <- yardstick::conf_mat(data = res, truth = gen_model, estimate = best_fit)
+autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low="#D6EAF8",high = "#2E86C1")
 ```
 
 
