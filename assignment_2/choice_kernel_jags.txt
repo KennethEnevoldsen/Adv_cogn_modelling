@@ -1,0 +1,26 @@
+model {
+# infer starting parameters
+  ck[1,1] ~ dt(0, .16, 1)T(0,) # half cauchy 
+  ck[1,2] ~ dt(0, .16, 1)T(0,) 
+  
+    # infer internal states
+  alpha  ~ dunif(0,1)
+  beta ~ dt(0, .16, 1)T(0,)
+  
+  for (t in 2:n_trials){
+    for (k in 1:2){
+      # learn
+      ck_chosen[t,k] <- ck[t-1,k] + alpha*(1-ck[t-1,k])
+      ck_unchosen[t,k] <- ck[t-1,k] + alpha*(0-ck[t-1,k])
+      
+      ck[t, k] <- ifelse(k == choice[t-1], ck_chosen[t, k], ck_unchosen[t, k])
+
+      exp_p[t, k] <- exp(beta * ck[t, k])
+    }
+    for (k in 1:2){
+      p[t, k] <- exp_p[t, k] / sum(exp_p[t,])
+    }
+
+    choice[t] ~ dcat(p[t,1:2])
+  }
+}

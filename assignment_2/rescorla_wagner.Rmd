@@ -8,7 +8,7 @@ editor_options:
 ---
 
 ```{r setup}
-pacman::p_load(pacman, tidyverse, R2jags, modules, patchwork,
+pacman::p_load(pacman, tidyverse, R2jags, modules, patchwork, cvms,
                extraDistr # for extra destributions
                )
 set.seed(1994)
@@ -166,32 +166,214 @@ qc$plot_agent_rw(alpha_sample = samples$BUGSoutput$sims.list$alpha,
 
 
 
+```{r choice kernel agent}
+choice_kernel <- function(payoff, alpha, beta){
+  n_trials = nrow(payoff)
+  choice <- array(0, c(n_trials))
+  r <- array(0, c(n_trials))
+  ck <- array(0, c(n_trials, 2)) # choice kernel
+  ck_chosen <- array(0, c(n_trials, 2)) 
+  ck_unchosen <- array(0, c(n_trials, 2)) 
+  p <- array(0, c(n_trials, 2))
+  exp_p <- array(0, c(n_trials, 2))
+
+    # trial1
+  ck[1,1] <- 1
+  ck[1,2] <- 1
+  
+  choice[1] <- extraDistr::rcat(1, c(0.5, 0.5))
+  r[1] <- payoff[1, choice[1]]
+  
+  
+  for (t in 2:n_trials){
+    for (k in 1:2){
+      # learn
+      ck_chosen[t,k] <- ck[t-1,k] + alpha*(1-ck[t-1,k])
+      ck_unchosen[t,k] <- ck[t-1,k] + alpha*(0-ck[t-1,k])
+      
+      ck[t, k] <- ifelse(k == choice[t-1], ck_chosen[t, k], ck_unchosen[t, k])
+
+      exp_p[t, k] <- exp(beta * ck[t, k])
+    }
+    for (k in 1:2){
+      p[t, k] <- exp_p[t, k] / sum(exp_p[t,])
+    }
+
+    choice[t] <- extraDistr::rcat(1, p[t,])
+     # get reward
+    r[t] <- payoff[t, choice[t]]
+  }
+    
+  return(list(choice = choice, 
+              reward = r, 
+              ck = ck, 
+              p = p,
+              start_params = list(alpha = alpha, beta = beta)))
+}
+
+
+ck_sim <- choice_kernel(payoff, alpha = 0.5, beta = 1)
+ck_sim$start_params
+
+p1 <- qc$plot_choice(choice = ck_sim$choice -1, 
+               p_1 = ck_sim$p[, 2], 
+               reward = ck_sim$reward)
+p1
+p2 <- qc$plot_rw_q(Q1 = res$ck[,1], Q2 = res$ck[,2])
+```
+
+
+```{r jags models choice kernel}
+model <- "model {
+    # infer starting parameters
+  ck[1,1] ~ dt(0, .16, 1)T(0,) # half cauchy 
+  ck[1,2] ~ dt(0, .16, 1)T(0,) 
+  
+    # infer internal states
+  alpha  ~ dunif(0,1)
+  beta ~ dt(0, .16, 1)T(0,)
+  
+  for (t in 2:n_trials){
+    for (k in 1:2){
+      # learn
+      ck_chosen[t,k] <- ck[t-1,k] + alpha*(1-ck[t-1,k])
+      ck_unchosen[t,k] <- ck[t-1,k] + alpha*(0-ck[t-1,k])
+      
+      ck[t, k] <- ifelse(k == choice[t-1], ck_chosen[t, k], ck_unchosen[t, k])
+
+      exp_p[t, k] <- exp(beta * ck[t, k])
+    }
+    for (k in 1:2){
+      p[t, k] <- exp_p[t, k] / sum(exp_p[t,])
+    }
+
+    choice[t] ~ dcat(p[t,1:2])
+  }
+}"
+
+writeLines(model, "choice_kernel_jags.txt")
+```
+
+```{r fit kernel jags}
+ck_sim <- agents$choice_kernel(payoff, alpha = 0.3, beta = 1)
+
+n = 2000
+p_load(runjags)
+
+?run.jags(method = "rjparallel")
+samples <- xsjags.parallel(data = list(choice = ck_sim$choice, n_trials = length(ck_sim$choice)), 
+                inits = NULL, 
+                parameters.to.save = c("alpha", "beta"), 
+                model.file = "choice_kernel_jags.txt",
+                n.chains = 4, n.iter =  n, n.burnin = 1000 # warm-up
+                )
+qc$plot_dens(samples$BUGSoutput$sims.list$alpha)
+qc$plot_dens(samples$BUGSoutput$sims.list$beta)
+
+```
+
+
+
 ```{r sim}
 payoff_gen_fun = "jh$bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))"
-agent_funs = list(rw = "agents$rw(payoff, alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))",
-               rb = "agents$RB(payoff, theta = runif(1, 0,1))")
+agent_gen_fun = list(rw = "agents$rw(payoff, alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))",
+               rb = "agents$RB(payoff, theta = runif(1, 0,1))",
+               ck = "agents$choice_kernel(payoff, alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))") 
 params_to_save = list(rw = c("alpha", "beta"),
-                      rb = c("theta"))
+                      rb = c("theta"),
+                      ck = c("alpha", "beta"))
 model_filepath = list(rw = "rw_jags.txt",
-                      rb = "RB_jags.txt")
+                      rb = "RB_jags.txt",
+                      ck =  "choice_kernel_jags.txt")
 
 # just simulate it 100 times
-results <- jh$sim_fit_compare(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 100)
+results <- jh$simulate_fit(payoff_gen_fun, agent_gen_fun, params_to_save, model_filepath, save_samples = T, n_sim = 100)
 
-# results %>% write_csv(., "rw_rb_n_sim_100")
+results %>% write_csv(., "n_sim_100")
 
-res <- results %>% 
-  pivot_longer(cols = c("rw", "rb"), names_to = "gen_model") %>% 
-  pivot_wider(values_from = "value", names_from = "model_fitted_to_data", names_prefix = "fitted_") %>% 
-  mutate(best_fit = if_else(fitted_rw < fitted_rb, "Rescorla-wagner", "Random bias"),
-         gen_model = if_else(gen_model == "rw", "Rescorla-wagner", "Random bias")) %>% 
-  mutate_at(c("gen_model", "best_fit"), factor, levels = c("Rescorla-wagner", "Random bias")) 
 
-# plot CM
-cm <- yardstick::conf_mat(data = res, truth = gen_model, estimate = best_fit)
-autoplot(cm, type = "heatmap") +
-  scale_fill_gradient(low="#D6EAF8",high = "#2E86C1")
+### model recovery
+rename_cols <- c(rw="Rescorla-wagner", rb="Random bias", ck="Choice-kernel")
+res <- results %>%
+  select(-c(samples, true_params)) %>%  
+  group_by(n_sim, model_generating_the_data) %>% 
+    # arrange and pick best according to BIC
+  arrange(BIC) %>% 
+  slice(1) %>% 
+  ungroup %>% 
+    # mutate columns
+  mutate(model_generating_the_data = recode(model_generating_the_data, !!!rename_cols),
+         best_fit_model =            recode(model_fitted_to_data,      !!!rename_cols)
+         ) %>% 
+  select(-model_fitted_to_data) %>% 
+  mutate_at(c("model_generating_the_data", "best_fit_model"), factor, levels = rename_cols) 
+
+
+cm <- res %>% 
+  cvms::evaluate(., target_col = model_generating_the_data, prediction_cols = best_fit_model, type = "binomial") 
+cvms::plot_confusion_matrix(cm, add_zero_shading = F)
+
+
+### parameter recovery
+rename_cols <- c(rw="Rescorla-wagner", rb="Random bias", ck="Choice-kernel")
+results$samples[[1]]
+
+
+get_true_actual <- function(data, agent, parameters, ci = 0.89, remove_col = c("samples", "BIC", "true_params")){
+  # currently using MAP
+  res = data %>% 
+    filter(model_generating_the_data == agent & model_fitted_to_data == agent)
+  
+  
+
+  # get map
+  for (parameter in parameters){
+    res[[paste(parameter, "map", sep = "_")]] <- sapply(res$samples,  function(x) jh$jag_map(x[[parameter]]) )
+    
+    # get CI
+
+    res[[paste(parameter, "ci_low", sep = "_")]]  <- sapply(res$samples,  function(x) bayestestR::ci(x[[parameter]], ci = ci)$CI_low)
+    res[[paste(parameter, "ci_high", sep = "_")]] <- sapply(res$samples,  function(x) bayestestR::ci(x[[parameter]], ci = ci)$CI_high)
+    
+  }
+  
+  # get true params
+  for (parameter in parameters){
+    res[[paste(parameter, "true", sep = "_")]] <- sapply(res$true_params,  function(x) x[[parameter]] )
+  }
+  
+  if (length(remove_col)>1){
+    remove_col = colnames(res)[colnames(res) %in% remove_col]
+    res <- res %>% select(-remove_col)
+  }
+  return(res)
+}
+
+
+rw_ap <- get_true_actual(results, agent = "rw", parameters = c("alpha", "beta"))
+p1 <- qc$plot_actual_predicted(actual = rw_ap$alpha_true, predicted = rw_ap$alpha_map) + xlim(0,NA) + ylim(0,NA)
+p1 + geom_pointrange(aes(x = rw_ap$alpha_true,
+                       ymin = rw_ap$alpha_ci_low, 
+                       ymax = rw_ap$alpha_ci_high), alpha = 0.3)
+
+p2 <- qc$plot_actual_predicted(actual = rw_ap$beta_true, predicted = rw_ap$beta_map) + xlim(0,NA) + ylim(0,NA)
+p2 + geom_pointrange(aes(x = rw_ap$beta_true,
+                       ymin = rw_ap$beta_ci_low, 
+                       ymax = rw_ap$beta_ci_high), alpha = 0.3)
+d <- (p1 + p2)
+
+
+
+rb_ap <- get_true_actual(results, agent = "rb", parameters = c("theta"))
+qc$plot_actual_predicted(actual = rb_ap$theta_true, predicted = rb_ap$theta_map)
+
+ck_ap <- get_true_actual(results, agent = "ck", parameters = c("alpha", "beta"))
+qc$plot_actual_predicted(actual = ck_ap$alpha_true, predicted = ck_ap$alpha_map)
+qc$plot_actual_predicted(actual = ck_ap$beta_true, predicted = ck_ap$beta_map)
+
 ```
+
+
 
 
 

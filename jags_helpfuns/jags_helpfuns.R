@@ -81,7 +81,7 @@ bandit_payoff <- function(n_trials = 100, probs = c(0.3, 0.8), reward = c(1, 1.5
   }
   return(res)
 }
-bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))
+# bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))
 
 
 #'@title simulate fit and compare your jags models and agents
@@ -100,11 +100,11 @@ bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))
 #'
 #'
 #'@export
-sim_fit_compare <- function(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 1){
+simulate_fit <- function(payoff_gen_fun, agent_gen_fun, params_to_save, model_filepath, save_samples = F, n_sim = 1){
   if (n_sim > 1){
     for (i in 1:n_sim){
       print(paste("Currenty running simulation: ", i, " out of ", n_sim, sep = ""))
-      tmp = sim_fit_compare(payoff_gen_fun, agent_funs, params_to_save, model_filepath, n_sim = 1)
+      tmp = simulate_fit(payoff_gen_fun, agent_gen_fun, params_to_save, model_filepath, save_samples,  n_sim = 1)
       tmp$n_sim = i
       if (i == 1){
         res <- tmp
@@ -114,17 +114,22 @@ sim_fit_compare <- function(payoff_gen_fun, agent_funs, params_to_save, model_fi
     }
     return(res)
   }
-  res = array(0, c(length(agent_funs), length(agent_funs)))
+  res = array(0, c(length(agent_gen_fun), length(agent_gen_fun)))
   res = as.data.frame(res)
-  colnames(res) = names(agent_funs)
+  colnames(res) = names(agent_gen_fun)
   res$model_fitted_to_data = rep("NA", nrow(res))
+  
+  if (isTRUE(save_samples)){
+    res$samples <- NA
+    res$true_params <- NA
+  }
   
   payoff <- eval(parse(text = payoff_gen_fun))
   
-  for (a in 1:length(agent_funs)){
-    nam = names(agent_funs[a])
+  for (a in 1:length(agent_gen_fun)){
+    nam = names(agent_gen_fun[a])
     print(paste("Currently similating and fitting to agent: ", nam, sep = ""))
-    sim_dat <- eval(parse(text = agent_funs[[a]])) # simulate data
+    sim_dat <- eval(parse(text = agent_gen_fun[[a]])) # simulate data
     
     # fit each model to data
     for (i in 1:length(params_to_save)){
@@ -134,8 +139,17 @@ sim_fit_compare <- function(payoff_gen_fun, agent_funs, params_to_save, model_fi
                                model.file = model_filepath[[i]],
                                n.chains = 4, n.iter = 3000, n.burnin = 1000)
       res[i, nam] <-  samples$BUGSoutput$DIC
-      res$model_fitted_to_data[i] <- names(params_to_save[i])
+      
+      if (isTRUE(save_samples)){
+        res$samples[i] <- list(samples$BUGSoutput$sims.list)
+        res$true_params[a] <- list(sim_dat$start_params)
+      }
+      res$model_fitted_to_data[i] <- names(model_filepath[i])
     }
   }
+  res <- res %>%
+    pivot_longer(cols = names(agent_gen_fun), names_to = "model_generating_the_data", values_to = "DIC")
   return(res)
 }
+
+               

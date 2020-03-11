@@ -215,20 +215,20 @@ plot_actual_predicted <- function(actual, predicted, add_rmse = T, add_r2 = T, c
   d <- data.frame(actual = actual, predicted = predicted)
   
   if (caption){
-    c_text = paste("\nMade using Quick 'n' Clean by K. Enevoldsen", sep = "")
+    c_text = paste("Dashed line indicate ","\nMade using Quick 'n' Clean by K. Enevoldsen", sep = "")
   } else {c_text = ""}
   
   
   p <- ggplot2::ggplot(data = d, aes(x = actual, y = predicted)) + 
-    geom_point(alpha = 0.5) +
-    geom_abline(intercept = 0, slope = 1) + 
+    ggplot2::geom_point(alpha = 0.5) +
+    ggplot2::geom_abline(intercept = 0, slope = 1, linetype = "dashed") + 
     ggplot2::labs(title = ' ', y = 'Predicted', x = 'Actual', caption = c_text) + 
     ggplot2::theme_bw() + 
     ggplot2::theme(panel.border = element_blank())
   
   if (add_rmse  | add_r2){
     e <- Metrics::rmse(d$actual, d$predicted)
-    r2 <- cor(d$actual, d$predicted)
+    r2 <- cor(d$actual, d$predicted)^2
     # placement
     yc <- min(predicted) + (max(predicted)-min(predicted))/8
     xc <- max(actual) - (max(actual)-min(actual))/8
@@ -332,6 +332,48 @@ plot_rw_q <- function(Q1, Q2, caption = T){
   p <- ggplot2::ggplot(data = res_df, aes(x = Trial, y = Q_val, color = Q)) + 
     geom_line() + 
     scale_colour_brewer(type = "seq",  palette = "Paired", direction = 1,  labels = c(expression(Q[1]), expression(Q[2]))) + 
+    ggplot2::theme_bw() + 
+    ggplot2::theme(panel.border = element_blank()) + 
+    ggplot2::labs(title = ' ', x = 'Trials', y = ' ', caption = c_text, color = "")
+  geom_jitter(aes(y = choice-1),width = 0.03, height = 0.03)
+  
+  return(p)
+}
+
+
+#'@title plots internal states of an agent
+#'trivial from title
+#'
+#'@param Q1
+#'@param Q2
+#'
+#'@author
+#'K. Enevoldsen
+#'
+#'@return 
+#'ggplot object
+#'
+#'@references
+#'
+#'@export
+plot_internal <- function(var_names = c("Q_1", "Q_2"), values = list(res$ck[,1],  res$ck[,2]), labels = c(expression(Q[1]), expression(Q[2])),  caption = T){
+  if (isTRUE(caption)){
+    c_text = paste("\nMade using Quick 'n' Clean by K. Enevoldsen", sep = "")
+  } else {c_text = ""}
+  
+  tmp = NULL
+  for (i in 1:length(var_names)){
+    tmp = c(tmp, rep(var_names[i], length(values[[i]])))
+  }
+  t <- rep(1:length(values[[1]]), length(var_names))
+  
+  res_df <- tibble(values = unlist(values), 
+                   Trial = t, 
+                   nam = tmp)
+
+  p <- ggplot2::ggplot(data = res_df, aes(x = Trial, y = values, color = nam)) + 
+    geom_line() + 
+    scale_colour_brewer(type = "seq",  palette = "Paired", direction = 1,  labels = labels) + 
     ggplot2::theme_bw() + 
     ggplot2::theme(panel.border = element_blank()) + 
     ggplot2::labs(title = ' ', x = 'Trials', y = ' ', caption = c_text, color = "")
