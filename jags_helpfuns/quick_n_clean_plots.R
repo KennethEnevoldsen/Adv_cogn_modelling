@@ -201,6 +201,7 @@ plot_dens <- function(x, add_map = T, add_box = T, ci = 0.95, caption = T){
 #'trivial from title
 #'
 #'@param x
+#'@param pointrange a 
 #'
 #'@author
 #'K. Enevoldsen
@@ -211,11 +212,11 @@ plot_dens <- function(x, add_map = T, add_box = T, ci = 0.95, caption = T){
 #'@references
 #'
 #'@export
-plot_actual_predicted <- function(actual, predicted, add_rmse = T, add_r2 = T, caption = T){
+plot_actual_predicted <- function(actual, predicted, pointrange_lower = NULL, pointrange_upper = NULL, pointrange_alpha = 0.2, add_rmse = T, add_r2 = T, caption = T){
   d <- data.frame(actual = actual, predicted = predicted)
   
   if (caption){
-    c_text = paste("Dashed line indicate ","\nMade using Quick 'n' Clean by K. Enevoldsen", sep = "")
+    c_text = paste("Dashed line indicate perfect prediction","\nMade using Quick 'n' Clean by K. Enevoldsen", sep = "")
   } else {c_text = ""}
   
   
@@ -241,6 +242,12 @@ plot_actual_predicted <- function(actual, predicted, add_rmse = T, add_r2 = T, c
     }
     p <- p + 
       ggplot2::annotate("text", x = xc, y = c(yc, yc*0.85), label = lab_text, parse = T)
+  }
+  if (! (is.null(pointrange_lower) | is.null(pointrange_upper))){
+    p <-  p + geom_pointrange(aes(x = actual,
+                                  ymin = pointrange_lower, 
+                                  ymax = pointrange_upper), 
+                              alpha = pointrange_alpha)
   }
   return(p)
 }

@@ -55,7 +55,7 @@ writeLines(model, "RB_jags.txt")
 
 # sim an fit RB
 ```{r sim}
-rb_sim <- agents$RB(theta = 0.7, payoff = payoff)
+rb_sim <- agents$RB(theta = runif(1, 0, 1), payoff = payoff)
 rb_sim
 
 
@@ -69,7 +69,7 @@ samples <- jags.parallel(data = list(choice = rb_sim$choices, n_trials = length(
 
 
 
-qc$plot_dens(x = samples$BUGSoutput$sims.list$theta)
+qc$plot_dens(x = samples$BUGSoutput$sims.list$theta) + geom_vline(xintercept = rb_sim$start_params$theta)
 qc$plot_scatter(x = samples$BUGSoutput$sims.list$theta)
 # qc$plot_dens_gif(x = samples$BUGSoutput$sims.list$theta)
 ```
@@ -105,22 +105,20 @@ qc$plot_actual_predicted(actual = results$theta_true, results$map_theta)
 ```
 
 
-```{r}
-payoff <- cbind(bandit_payoff(ntrials = 100, choice = "a", a_prop = .3, a_reward = 2), 
-                bandit_payoff(ntrials = 100, choice = "b", b_prop = .8, b_reward = 1.5))
-
-```
-
 ```{r jags models rw}
+# x = seq(-1,5, by =.001)
+# y = dgamma(x,1, 1)
+# plot(x, y)
+
 model <- "model {
   
     # infer starting parameters
-  Q[1,1] ~ dt(0, .16, 1)T(0,) # half cauchy
-  Q[1,2] ~ dt(0, .16, 1)T(0,)
+  Q[1,1] ~ dgamma(1, .5)
+  Q[1,2] ~ dgamma(1, .5)
   
     # infer internal states
   alpha  ~ dunif(0,1)
-  beta ~ dt(0, .16, 1)T(0,)
+  beta ~ dgamma(1, .5)
   
   for (t in 2:n_trials){
     for (k in 1:2){
@@ -138,11 +136,14 @@ model <- "model {
   }
 }"
 
-
 writeLines(model, "rw_jags.txt")
 ```
 
 ```{r rescorla wagner sim}
+payoff <- cbind(bandit_payoff(ntrials = 100, choice = "a", a_prop = .3, a_reward = 2), 
+                bandit_payoff(ntrials = 100, choice = "b", b_prop = .8, b_reward = 1))
+
+
   # sim
 res <- agents$rw(payoff, alpha = 0.3, beta = 2)
 
@@ -153,10 +154,11 @@ samples <- jags.parallel(data = list(choice = res$choice, n_trials = length(res$
                 n.chains = 4, n.iter = 2000, n.burnin = 1000 # warm-up
                 )
 
+
 qc$plot_agent_rw(alpha_sample = samples$BUGSoutput$sims.list$alpha,
-                 true_alpha = 0.3, 
+                 true_alpha = res$start_params$alpha, 
                  beta_sample = samples$BUGSoutput$sims.list$beta,
-                 true_beta = 2, 
+                 true_beta = res$start_params$beta, 
                  choice = res$choice-1, 
                  p_1 = res$p[,2], 
                  reward = res$reward,
@@ -252,20 +254,17 @@ model <- "model {
 }"
 
 writeLines(model, "choice_kernel_jags.txt")
+
 ```
 
 ```{r fit kernel jags}
 ck_sim <- agents$choice_kernel(payoff, alpha = 0.3, beta = 1)
 
-n = 2000
-p_load(runjags)
-
-?run.jags(method = "rjparallel")
-samples <- xsjags.parallel(data = list(choice = ck_sim$choice, n_trials = length(ck_sim$choice)), 
+samples <- jags.parallel(data = list(choice = ck_sim$choice, n_trials = length(ck_sim$choice)), 
                 inits = NULL, 
                 parameters.to.save = c("alpha", "beta"), 
                 model.file = "choice_kernel_jags.txt",
-                n.chains = 4, n.iter =  n, n.burnin = 1000 # warm-up
+                n.chains = 4, n.iter =  3000, n.burnin = 1000 # warm-up
                 )
 qc$plot_dens(samples$BUGSoutput$sims.list$alpha)
 qc$plot_dens(samples$BUGSoutput$sims.list$beta)
@@ -275,10 +274,12 @@ qc$plot_dens(samples$BUGSoutput$sims.list$beta)
 
 
 ```{r sim}
-payoff_gen_fun = "jh$bandit_payoff(100, probs = c(.3, .8), reward = c(1, 1.5))"
-agent_gen_fun = list(rw = "agents$rw(payoff, alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))",
-               rb = "agents$RB(payoff, theta = runif(1, 0,1))",
-               ck = "agents$choice_kernel(payoff, alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))") 
+gen_fun = list(rw = "agents$rw(jh$bandit_payoff(100, probs = c(.3, .8), reward = c(1, 0.5)), 
+                               alpha = runif(1, 0, 1), beta = runif(1, 0.5, 3))",
+               rb = "agents$RB(jh$bandit_payoff(100, probs = c(.3, .8), reward = c(1, 0.5)), 
+                               theta = runif(1, 0, 1))",
+               ck = "agents$choice_kernel(jh$bandit_payoff(100, probs = c(.3, .8), reward = c(1, 0.5)), 
+                                          alpha = runif(1, 0,1), beta = runif(1, 0.5, 3))") 
 params_to_save = list(rw = c("alpha", "beta"),
                       rb = c("theta"),
                       ck = c("alpha", "beta"))
@@ -286,19 +287,25 @@ model_filepath = list(rw = "rw_jags.txt",
                       rb = "RB_jags.txt",
                       ck =  "choice_kernel_jags.txt")
 
+data_to_fit = list(rw = "list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward)",
+                   rb = "list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward)",
+                   ck = "list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward)")
+
+
 # just simulate it 100 times
-results <- jh$simulate_fit(payoff_gen_fun, agent_gen_fun, params_to_save, model_filepath, save_samples = T, n_sim = 100)
+results <- jh$simulate_fit(gen_fun, data_to_fit, model_filepath, params_to_save, save_samples = T, n_sim = 100)
 
-results %>% write_csv(., "n_sim_100")
-
+# saveRDS(results, "n_sim_100_2.rds")
+# Restore it under a different name
+# results <- readRDS("n_sim_100.rds")
 
 ### model recovery
 rename_cols <- c(rw="Rescorla-wagner", rb="Random bias", ck="Choice-kernel")
 res <- results %>%
   select(-c(samples, true_params)) %>%  
   group_by(n_sim, model_generating_the_data) %>% 
-    # arrange and pick best according to BIC
-  arrange(BIC) %>% 
+    # arrange and pick best according to DIC
+  arrange(DIC) %>% 
   slice(1) %>% 
   ungroup %>% 
     # mutate columns
@@ -306,35 +313,27 @@ res <- results %>%
          best_fit_model =            recode(model_fitted_to_data,      !!!rename_cols)
          ) %>% 
   select(-model_fitted_to_data) %>% 
-  mutate_at(c("model_generating_the_data", "best_fit_model"), factor, levels = rename_cols) 
-
+  mutate_at(c("model_generating_the_data", "best_fit_model"), as.character) 
 
 cm <- res %>% 
-  cvms::evaluate(., target_col = model_generating_the_data, prediction_cols = best_fit_model, type = "binomial") 
-cvms::plot_confusion_matrix(cm, add_zero_shading = F)
+  cvms::evaluate(., target_col = "model_generating_the_data", prediction_cols = "best_fit_model", type = "multinomial") 
+conf <- cvms::plot_confusion_matrix(cm, add_zero_shading = F, add_row_percentages = F) + 
+  labs(x = "Generative model", y = "Best fit")
 
 
 ### parameter recovery
-rename_cols <- c(rw="Rescorla-wagner", rb="Random bias", ck="Choice-kernel")
-results$samples[[1]]
-
-
-get_true_actual <- function(data, agent, parameters, ci = 0.89, remove_col = c("samples", "BIC", "true_params")){
+get_true_actual <- function(data, agent, parameters, ci = 0.89, remove_col = c("samples", "DIC", "true_params")){
   # currently using MAP
   res = data %>% 
     filter(model_generating_the_data == agent & model_fitted_to_data == agent)
   
-  
-
   # get map
   for (parameter in parameters){
     res[[paste(parameter, "map", sep = "_")]] <- sapply(res$samples,  function(x) jh$jag_map(x[[parameter]]) )
     
     # get CI
-
     res[[paste(parameter, "ci_low", sep = "_")]]  <- sapply(res$samples,  function(x) bayestestR::ci(x[[parameter]], ci = ci)$CI_low)
     res[[paste(parameter, "ci_high", sep = "_")]] <- sapply(res$samples,  function(x) bayestestR::ci(x[[parameter]], ci = ci)$CI_high)
-    
   }
   
   # get true params
@@ -349,28 +348,48 @@ get_true_actual <- function(data, agent, parameters, ci = 0.89, remove_col = c("
   return(res)
 }
 
-
+  # rescorla
 rw_ap <- get_true_actual(results, agent = "rw", parameters = c("alpha", "beta"))
-p1 <- qc$plot_actual_predicted(actual = rw_ap$alpha_true, predicted = rw_ap$alpha_map) + xlim(0,NA) + ylim(0,NA)
-p1 + geom_pointrange(aes(x = rw_ap$alpha_true,
-                       ymin = rw_ap$alpha_ci_low, 
-                       ymax = rw_ap$alpha_ci_high), alpha = 0.3)
+p1 <- qc$plot_actual_predicted(actual = rw_ap$alpha_true, predicted = rw_ap$alpha_map,
+                          pointrange_lower = rw_ap$alpha_ci_low,
+                          pointrange_upper = rw_ap$alpha_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
 
-p2 <- qc$plot_actual_predicted(actual = rw_ap$beta_true, predicted = rw_ap$beta_map) + xlim(0,NA) + ylim(0,NA)
-p2 + geom_pointrange(aes(x = rw_ap$beta_true,
-                       ymin = rw_ap$beta_ci_low, 
-                       ymax = rw_ap$beta_ci_high), alpha = 0.3)
-d <- (p1 + p2)
+p2 <- qc$plot_actual_predicted(actual = rw_ap$beta_true, predicted = rw_ap$beta_map, 
+                          pointrange_lower = rw_ap$beta_ci_low,
+                          pointrange_upper = rw_ap$beta_ci_high,
+                          caption = F) + 
+  xlim(0,3) + ylim(0,5)
+rw_plot <- (p1 + p2)
 
-
-
+  # random bias
 rb_ap <- get_true_actual(results, agent = "rb", parameters = c("theta"))
-qc$plot_actual_predicted(actual = rb_ap$theta_true, predicted = rb_ap$theta_map)
-
+rb_plot <- qc$plot_actual_predicted(actual = rb_ap$theta_true, predicted = rb_ap$theta_map, 
+                          pointrange_lower = rb_ap$theta_ci_low,
+                          pointrange_upper = rb_ap$theta_ci_high,
+                          caption = F)
+  
+  # choice kernel
 ck_ap <- get_true_actual(results, agent = "ck", parameters = c("alpha", "beta"))
-qc$plot_actual_predicted(actual = ck_ap$alpha_true, predicted = ck_ap$alpha_map)
-qc$plot_actual_predicted(actual = ck_ap$beta_true, predicted = ck_ap$beta_map)
+p1 <- qc$plot_actual_predicted(actual = ck_ap$alpha_true, predicted = ck_ap$alpha_map,
+                          pointrange_lower = ck_ap$alpha_ci_low,
+                          pointrange_upper = ck_ap$alpha_ci_high,
+                          caption = F) + 
+  xlim(0, NA) + ylim(0, NA)
 
+p2 <- qc$plot_actual_predicted(actual = ck_ap$beta_true, predicted = ck_ap$beta_map,
+                          pointrange_lower = ck_ap$beta_ci_low,
+                          pointrange_upper = ck_ap$beta_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+ck_plot <- (p1 + p2)
+
+
+
+(conf + (rb_plot) )/
+    (rw_plot)/
+    (ck_plot) +  plot_annotation(tag_levels = 'A')
 ```
 
 

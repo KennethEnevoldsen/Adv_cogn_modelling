@@ -1,12 +1,12 @@
 model {
   
     # infer starting parameters
-  Q[1,1] ~ dt(0, .16, 1)T(0,) # half cauchy
-  Q[1,2] ~ dt(0, .16, 1)T(0,)
+  Q[1,1] ~ dgamma(1, .5)
+  Q[1,2] ~ dgamma(1, .5)
   
     # infer internal states
   alpha  ~ dunif(0,1)
-  beta ~ dt(0, .16, 1)T(0,)
+  beta ~ dgamma(1, .5)
   
   for (t in 2:n_trials){
     for (k in 1:2){

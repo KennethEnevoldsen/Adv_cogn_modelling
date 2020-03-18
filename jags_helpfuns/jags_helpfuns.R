@@ -100,11 +100,12 @@ bandit_payoff <- function(n_trials = 100, probs = c(0.3, 0.8), reward = c(1, 1.5
 #'
 #'
 #'@export
-simulate_fit <- function(payoff_gen_fun, agent_gen_fun, params_to_save, model_filepath, save_samples = F, n_sim = 1){
+simulate_fit <- function(gen_fun, data_to_fit, model_filepath, params_to_save, save_samples = F, n_sim = 1){
+  
   if (n_sim > 1){
     for (i in 1:n_sim){
       print(paste("Currenty running simulation: ", i, " out of ", n_sim, sep = ""))
-      tmp = simulate_fit(payoff_gen_fun, agent_gen_fun, params_to_save, model_filepath, save_samples,  n_sim = 1)
+      tmp = simulate_fit(gen_fun, data_to_fit, model_filepath, params_to_save, save_samples,  n_sim = 1)
       tmp$n_sim = i
       if (i == 1){
         res <- tmp
@@ -114,41 +115,45 @@ simulate_fit <- function(payoff_gen_fun, agent_gen_fun, params_to_save, model_fi
     }
     return(res)
   }
-  res = array(0, c(length(agent_gen_fun), length(agent_gen_fun)))
-  res = as.data.frame(res)
-  colnames(res) = names(agent_gen_fun)
-  res$model_fitted_to_data = rep("NA", nrow(res))
+
+  if (length(unique(names(gen_fun))) != length(gen_fun)){
+    stop("The entries in the gen_fun list must be named with unique names")}
+  if (length(unique(names(model_filepath))) != length(model_filepath)){
+    stop("The entries in the model_filepath list must be named with unique names")}
   
-  if (isTRUE(save_samples)){
-    res$samples <- NA
-    res$true_params <- NA
-  }
-  
-  payoff <- eval(parse(text = payoff_gen_fun))
-  
-  for (a in 1:length(agent_gen_fun)){
-    nam = names(agent_gen_fun[a])
-    print(paste("Currently similating and fitting to agent: ", nam, sep = ""))
-    sim_dat <- eval(parse(text = agent_gen_fun[[a]])) # simulate data
+  res_l = NULL
+  for (a in 1:length(gen_fun)){
+    nam <- names(agent_gen_fun[a])
+    print(paste("Currently similating and fitting to the generative model: ", nam, sep = ""))
+    sim_dat <- eval(parse(text = gen_fun[[a]])) # simulate data
+    
+    # make dataframe to save in
+    res <- dplyr::tibble("model_generating_the_data" = rep(nam, length(params_to_save)), 
+                  "DIC" = NA,
+                  "model_fitted_to_data" = NA)
+    if (isTRUE(save_samples)){
+      res$samples <- NA
+      res$true_params <- rep(list(sim_dat$start_params), length(params_to_save))
+    }
     
     # fit each model to data
     for (i in 1:length(params_to_save)){
-      samples <- jags.parallel(data = list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward), 
+      samples <- jags.parallel(data = eval(parse(text = d)), 
                                inits = NULL, 
                                parameters.to.save = params_to_save[[i]], 
                                model.file = model_filepath[[i]],
                                n.chains = 4, n.iter = 3000, n.burnin = 1000)
-      res[i, nam] <-  samples$BUGSoutput$DIC
-      
+      res$DIC[i] <-  samples$BUGSoutput$DIC
+      res$model_fitted_to_data[i] <- names(model_filepath[i])
       if (isTRUE(save_samples)){
         res$samples[i] <- list(samples$BUGSoutput$sims.list)
-        res$true_params[a] <- list(sim_dat$start_params)
       }
-      res$model_fitted_to_data[i] <- names(model_filepath[i])
     }
+    res_l[[a]] <- res
   }
-  res <- res %>%
-    pivot_longer(cols = names(agent_gen_fun), names_to = "model_generating_the_data", values_to = "DIC")
+  
+  res <- res_l %>% 
+    do.call(rbind, .) 
   return(res)
 }
 

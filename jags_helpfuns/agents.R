@@ -60,7 +60,7 @@ rw <- function(payoff, alpha, beta){
   choice <- array(0, c(n_trials))
   r <- array(0, c(n_trials))
   Q <- array(0, c(n_trials, 2))
-  
+  Q_update <- array(0, c(n_trials, 2))
   p <- array(0, c(n_trials, 2))
   
   # trial
@@ -71,11 +71,15 @@ rw <- function(payoff, alpha, beta){
   r[1] <- payoff[1, choice[1]]
   
   for (t in 2:n_trials){
-    
-    # learn
-    Q[t,] <- Q[t-1,] + alpha*(r[t-1] - Q[t-1, ])
-    Q[t, 2-(choice[t-1]-1)] <- Q[t-1, 2-(choice[t-1]-1)] # but only on the given choice
-    
+      for (k in 1:2){
+        # update utility Q for chosen option with reward on last trials
+        Q_update[t, k] <- Q[t-1, k] + alpha*(r[t-1] - Q[t-1, k])
+        Q[t, k] <- ifelse(k==choice[t-1], Q_update[t, k], Q[t-1, k])
+        exp_p[t, k] <- exp(beta*Q[t,k])
+      }
+      for (k in 1:2){
+        p[t,k] <- exp_p[t,k]/sum(exp_p[t,])
+      }
     # make choice
     p[t,] <-  exp(beta*Q[t,])/sum( exp(beta*Q[t,]))
     choice[t] <- rcat(1, p[t,])

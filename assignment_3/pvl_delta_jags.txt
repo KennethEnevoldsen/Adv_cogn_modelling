@@ -1,0 +1,47 @@
+model {
+  w ~ dt(0, 1, 1)T(0,) # half cauchy with a precision of 1
+  c ~ dt(0, 1, 1)T(0,)
+  A ~ dunif(0, 1)
+  a ~ dunif(0, 1)
+  
+  for (d in 1:n_decks){ev[1, d] ~ dnorm(0, 0.01)}
+  
+  theta = 3^c - 1
+
+  for (d in 1:n_decks){
+      tmp_p[1, d] <- theta * exp(ev[1, d])
+    }
+    
+  for (d in 1:n_decks){
+      p[1,d] <- tmp_p[1,d]/sum(tmp_p[1,1:n_decks])
+    }
+  
+  choice[1] ~ dcat(p[1,1:n_decks])
+  
+  for (t in 2:n_trials){ # for each trial
+    for (d in 1:n_decks){ # for each deck
+      
+        # calculate subjective utility
+      u[t,d] <- ifelse(choice[t-1] >= 0, 
+                       abs(r[t-1])^A,
+                       -w * abs(r[t-1])^A
+                       )
+                       
+      ev[t,d] <- ifelse(choice[t-1] == d, 
+                   ev[t-1, d] + a * (u[t, d] - ev[t-1, d]),
+                   ev[t-1, d]
+                   )
+    }
+    for (d in 1:n_decks){
+      tmp_p[t, d] <- theta * exp(ev[t, d])
+    }
+    
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+    }
+    
+    choice[t] ~ dcat(p[t,1:n_decks]) # categorical distribution
+  }
+}
+

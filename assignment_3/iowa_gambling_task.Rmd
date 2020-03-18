@@ -3,9 +3,201 @@ title: "iowa_gambling_task"
 author: "K. Enevoldsen"
 date: "3/11/2020"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
-```{r}
+```{r setup}
+pacman::p_load(pacman, tidyverse, R2jags, modules, patchwork, cvms,
+               extraDistr # for extra destributions
+               )
+set.seed(1994)
+agents <- modules::import(module = "../jags_helpfuns/agents", attach = T, doc = T)
+modules::reload(agents)
+qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
+modules::reload(qc)
+jh <- modules::import("../jags_helpfuns/jags_helpfuns", attach = T, doc = T)
+modules::reload(jh)
+```
+
+
+```{r gen iowa decks}
+gen_iowa_deck <- function(reward = 100, loss = 250, n_trials = 10, n_loss = 5){
+  loss = abs(loss)
+  r = rep(reward, n_trials)
+  l = c(rep(loss, n_loss), rep(0, n_trials - n_loss))
+  return(r - sample(l))
+}
+A = as.vector(replicate(10, gen_iowa_deck(reward = 100, loss = 250 , n_trials = 10, n_loss = 5))) # bad frequent
+B = as.vector(replicate(10, gen_iowa_deck(reward = 100, loss = 1250, n_trials = 10, n_loss = 1))) # bad infrequent
+C = as.vector(replicate(10, gen_iowa_deck(reward = 50 , loss = 50  , n_trials = 10, n_loss = 5))) # good frequent
+D = as.vector(replicate(10, gen_iowa_deck(reward = 50 , loss = 250 , n_trials = 10, n_loss = 1))) # good infrequent
+
+payoff = matrix(c(A, B, C, D), 100)
+```
+
+```{r pvl_delta model}
+
+#'@title PVL delta Agent
+#'@description
+#'
+#'
+#'@param a The learning rate of the agent 0 <= a <= 1
+#'@param A The shape parameter  0 <= A <= 1
+#'@param w The loss aversion parameter. 0 <= w <= 5
+#'@param c response consistency. 0 <= c <= 5
+#'
+#'@author
+#'K. Enevoldsen
+#'
+#'@return 
+#'
+#'
+#'@references
+#'
+#'@export
+pvl_delta <- function(payoff, a, A, w, c){
+  
+  theta = c^3 - 1
+  
+  n_trials <- nrow(payoff) # number of trials
+  n_decks <- ncol(payoff) # number of decks
+  
+  choice <- rep(0, n_trials)
+  r <- rep(0, n_trials)
+  u <- array(0, c(n_trials, n_decks))
+  ev <- array(0, c(n_trials, n_decks))
+  p <- array(0, c(n_trials, n_decks))
+
+  tmp_p = rep(0, n_decks) # temporary vairable
+  
+  p[1,] <- rep(1/n_decks, n_decks)
+  choice[1] <- extraDistr::rcat(1, p[1,])
+  r[1] <- payoff[1, choice[1]]
+  
+  for (t in 2:n_trials){ # for each trial
+    for (d in 1:n_decks){ # for each deck
+      
+        # calculate subjective utility
+      u[t,d] <- ifelse(r[t-1] >= 0, 
+                       r[t-1]^A,
+                       -w * abs(r[t-1])^A
+                       )
+                       
+      ev[t,d] <- ifelse(choice[t-1] == d, 
+                   ev[t-1, d] + a * (u[t, d] - ev[t-1, d]),
+                   ev[t-1, d]
+                   )
+      
+       # temporary calculation, could simply have been: theta*exp(ev[t,]) in R but since JAGS's exp() isn't vectorized we have to do this to copy
+      tmp_p[d] <- exp(theta*ev[t, d])
+    }
+    
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[d]/sum(tmp_p)
+    }
+    
+    choice[t] <- extraDistr::rcat(1, p[t,]) # categorical distribution
+    
+    #  what reward does the agent get
+    r[t] <- payoff[t, choice[t]]
+  }
+  
+  return(list(reward = r, 
+              choices = choice, 
+              ev = ev,
+              p = p,
+              u = u,
+              start_params = list(a = a, A = A, w = w, c = c)))
+}
+```
+
+```{r pvl_delta jags model}
+model <- "model {
+  w ~ dt(0, 1, 1)T(0,) # half cauchy with a precision of 1
+  c ~ dt(0, 1, 1)T(0,)
+  A ~ dunif(0, 1)
+  a ~ dunif(0, 1)
+  
+  for (d in 1:n_decks){ev[1, d] ~ dnorm(0, 0.01)}
+  
+  theta = 3^c - 1
+
+  for (d in 1:n_decks){
+      tmp_p[1, d] <- theta * exp(ev[1, d])
+    }
+    
+  for (d in 1:n_decks){
+      p[1,d] <- tmp_p[1,d]/sum(tmp_p[1,1:n_decks])
+    }
+  
+  choice[1] ~ dcat(p[1,1:n_decks])
+  
+  for (t in 2:n_trials){ # for each trial
+    for (d in 1:n_decks){ # for each deck
+      
+        # calculate subjective utility
+      u[t,d] <- ifelse(choice[t-1] >= 0, 
+                       abs(r[t-1])^A,# this apparenty does not work without abs (why? - I have no idea)
+                       -w * abs(r[t-1])^A
+                       )
+                       
+      ev[t,d] <- ifelse(choice[t-1] == d, 
+                   ev[t-1, d] + a * (u[t, d] - ev[t-1, d]),
+                   ev[t-1, d]
+                   )
+    }
+    for (d in 1:n_decks){
+      tmp_p[t, d] <- theta * exp(ev[t, d])
+    }
+    
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+    }
+    
+    choice[t] ~ dcat(p[t,1:n_decks]) # categorical distribution
+  }
+}
+"
+
+writeLines(model, "pvl_delta_jags.txt")
+```
+
+
+
+$$
+1/\sigma^2 = (\sigma^2)^{-1} = \sigma^{-2} = \tau
+$$
+where $\tau$ is precision and $\sigma$ is standard deviation
+
+```{r pvl delta sim}
+
+
+sim_dat <- pvl_delta(payoff, a = 0.3, A = 0.5, w = 2, c = (0.01+1)^(1/3) ) # c = (theta+1)^(1/3) as theta = c^3-1
+d <- tibble(A = sim_dat$ev[,1],
+             B = sim_dat$ev[,2],
+             C = sim_dat$ev[,3],
+             D = sim_dat$ev[,4], 
+             trial = 1:length(sim_dat$ev[,4]))
+
+d_long <- d %>% 
+  pivot_longer(cols = c("A", "B", "C", "D"))
+
+ggplot(d_long, aes(x = trial, y = value)) + 
+  geom_line() + 
+  facet_wrap(~name)
+
+qc$plot_choice(choice = sim_dat$choices-1)
+
+samples <- jags.parallel(data = list(payoff = payoff, choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward, n_decks = ncol(payoff)), 
+                inits = NULL, 
+                parameters.to.save = c("a", "A", "w", "c"), 
+                model.file = "pvl_delta_jags.txt",
+                n.chains = 4, n.iter = 4000, n.burnin = 1000 # warm-up
+                )
+
 
 ```
 
