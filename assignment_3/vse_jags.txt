@@ -1,0 +1,38 @@
+model {
+  alpha ~ dunif(0,1)
+  theta ~dnorm(0.4, 4)T(0,1)
+  delta ~ dnorm(0.5, 4)T(0,1) # sd = 1/4
+  phi ~ dnorm(0, 0.5)
+  beta ~ dt(0, 1, 1)T(0,)
+
+    # choice first round
+  for (d in 1:n_decks){
+    explore[1,d] ~ dnorm(0,1)
+    exploit[1,d] ~ dnorm(0,1)
+    
+    p[1,d] <- 0.25
+  }
+  for (t in 2:n_trials){ # for each trial
+    
+    # calculate 'utiity'
+    v[t] <- reward[t, choice[t-1]]^theta - loss[t-1, choice[t-1]]^theta
+    
+    for (d in 1:n_decks){ # for each deck
+      exploit[t, d] <- ifelse(choice[t-1] == d,
+                              exploit[t-1, d] * delta + v[t],
+                              exploit[t-1, d] * delta)
+      explore[t, d] <- explore[t-1, d] + alpha * (phi - explore[t-1, d])
+      
+      # for softmax
+      tmp_p[t, d] <- exp(beta * (exploit[t, d] + explore[t, d]))
+    }
+
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+    }
+    choice[t] ~ dcat(p[t,]) # categorical distribution
+  }
+
+}
+

@@ -1,0 +1,65 @@
+model {
+  a_rew ~ dt(0, 1, 1)T(0,1)
+  a_pun ~ dt(0, 1, 1)T(0,1)
+  decay ~dt(0, 1, 1)T(0,)
+  w_f ~ dnorm(0, 1)
+  w_p ~ dnorm(0, 1)
+
+  c <- n_decks - 1
+    # choice first round
+  for (d in 1:n_decks){
+    ev[1,d] ~ dnorm(0,1)
+    ef[1,d] ~ dnorm(0,1)
+    pers[1,d] ~ dnorm(0,1)
+    
+    p[1,d] <- 0.25
+  }
+  
+  # building the model
+  for (t in 2:n_trials) {
+    
+    sign_x[t] <- ifelse(r[t-1] == 0, 0,
+                       ifelse(r[t-1]>0,1,-1)) 
+    
+    for (d in 1:n_decks) {
+      
+      
+      ev_update[t,d] <- ifelse(sign_x[t] >= 0,
+        ev[t-1, d] + (a_rew*(r[t-1] - ev[t-1,d])),
+        ev[t-1, d] + (a_pun*(r[t-1] - ev[t-1,d])))
+
+      ev[t,d] <- ifelse(choice[t-1]==d, ev_update[t,d], ev[t-1,d]) 
+
+      ef_chosen[t,d] <- ifelse(sign_x[t] >= 0,
+        ef[t-1, d] + (a_rew*(sign_x[t] - ef[t-1,d])),
+        ef[t-1, d] + (a_pun*(sign_x[t] - ef[t-1,d])))
+      
+      ef_not_chosen[t,d] <- ifelse(sign_x[t] >= 0,
+        ef[t-1, d] + (a_pun*((-sign_x[t]/3) - ef[t-1,d])),
+        ef[t-1, d] + (a_rew*((-sign_x[t]/3) - ef[t-1,d])))
+      
+      
+      ef[t,d] <- ifelse(choice[t-1]==d, ef_chosen[t,d], ef_not_chosen[t,d]) 
+      
+
+      pers[t,d] <- ifelse(choice[t-1]==d,
+                        1/(1+decay),
+                        pers[t-1,d]/(1+decay))
+
+      v[t,d] <- ev[t,d] + ef[t,d] * w_f + pers[t,d] * w_p
+      
+
+      tmp_p[t,d] <- exp(v[t,d])
+      
+    } # end d loop
+    
+    for (d in 1:n_decks) {
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,])
+    } # end second d loop
+    
+    choice[t] ~ dcat(p[t,]) # choice on trial t is a sample from a categorical distribution
+    
+  }
+
+}
+

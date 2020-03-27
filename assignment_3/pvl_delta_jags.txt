@@ -1,29 +1,26 @@
 model {
-  w ~ dt(0, 1, 1)T(0,) # half cauchy with a precision of 1
-  c ~ dt(0, 1, 1)T(0,)
+w ~ dt(0, 0.25, 1)T(0,5) # half cauchy with a precision of 0.25 (mean 0 and 1 just means cauchy - as opposed to student t)
+  theta ~ dnorm(0,1)T(0,)
   A ~ dunif(0, 1)
   a ~ dunif(0, 1)
   
   for (d in 1:n_decks){ev[1, d] ~ dnorm(0, 0.01)}
-  
-  theta = 3^c - 1
 
   for (d in 1:n_decks){
-      tmp_p[1, d] <- theta * exp(ev[1, d])
+      tmp_p[1, d] <- exp(theta *ev[1, d])
     }
     
   for (d in 1:n_decks){
       p[1,d] <- tmp_p[1,d]/sum(tmp_p[1,1:n_decks])
     }
-  
   choice[1] ~ dcat(p[1,1:n_decks])
   
   for (t in 2:n_trials){ # for each trial
     for (d in 1:n_decks){ # for each deck
       
         # calculate subjective utility
-      u[t,d] <- ifelse(choice[t-1] >= 0, 
-                       abs(r[t-1])^A,
+      u[t,d] <- ifelse(r[t-1] >= 0, 
+                       abs(r[t-1])^A,# this apparenty does not work without abs (why? - I have no idea)
                        -w * abs(r[t-1])^A
                        )
                        
@@ -33,15 +30,15 @@ model {
                    )
     }
     for (d in 1:n_decks){
-      tmp_p[t, d] <- theta * exp(ev[t, d])
+      tmp_p[t, d] <- exp(theta * ev[t, d])
     }
     
     # update prop
     for (d in 1:n_decks){
-      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,])
     }
     
-    choice[t] ~ dcat(p[t,1:n_decks]) # categorical distribution
+    choice[t] ~ dcat(p[t,]) # categorical distribution
   }
 }
 

@@ -123,7 +123,7 @@ simulate_fit <- function(gen_fun, data_to_fit, model_filepath, params_to_save, s
   
   res_l = NULL
   for (a in 1:length(gen_fun)){
-    nam <- names(agent_gen_fun[a])
+    nam <- names(gen_fun[a])
     print(paste("Currently similating and fitting to the generative model: ", nam, sep = ""))
     sim_dat <- eval(parse(text = gen_fun[[a]])) # simulate data
     
@@ -138,15 +138,15 @@ simulate_fit <- function(gen_fun, data_to_fit, model_filepath, params_to_save, s
     
     # fit each model to data
     for (i in 1:length(params_to_save)){
-      samples <- jags.parallel(data = eval(parse(text = d)), 
+      samples <- R2jags::jags.parallel(data = eval(parse(text = data_to_fit[[i]])), 
                                inits = NULL, 
                                parameters.to.save = params_to_save[[i]], 
                                model.file = model_filepath[[i]],
-                               n.chains = 4, n.iter = 3000, n.burnin = 1000)
+                               n.chains = 4, n.iter = 5000, n.burnin = 1000)
       res$DIC[i] <-  samples$BUGSoutput$DIC
       res$model_fitted_to_data[i] <- names(model_filepath[i])
       if (isTRUE(save_samples)){
-        res$samples[i] <- list(samples$BUGSoutput$sims.list)
+        res$samples[i] <- list(samples)
       }
     }
     res_l[[a]] <- res

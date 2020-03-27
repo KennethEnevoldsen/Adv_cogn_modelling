@@ -12,6 +12,7 @@ pacman::p_load(pacman, tidyverse, R2jags, modules, patchwork, cvms,
                extraDistr # for extra destributions
                )
 set.seed(1994)
+
 agents <- modules::import(module = "../jags_helpfuns/agents", attach = T, doc = T)
 modules::reload(agents)
 qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
@@ -36,7 +37,7 @@ D = as.vector(replicate(10, gen_iowa_deck(reward = 50 , loss = 250 , n_trials = 
 payoff = matrix(c(A, B, C, D), 100)
 ```
 
-```{r pvl_delta model}
+```{r pvl_delta model} 
 
 #'@title PVL delta Agent
 #'@description
@@ -56,9 +57,11 @@ payoff = matrix(c(A, B, C, D), 100)
 #'@references
 #'
 #'@export
-pvl_delta <- function(payoff, a, A, w, c){
+pvl_delta <- function(payoff, a, A, w, theta){
+  if (is.list(payoff)){
+    payoff = payoff$payoff
+  }
   
-  theta = c^3 - 1
   
   n_trials <- nrow(payoff) # number of trials
   n_decks <- ncol(payoff) # number of decks
@@ -69,7 +72,7 @@ pvl_delta <- function(payoff, a, A, w, c){
   ev <- array(0, c(n_trials, n_decks))
   p <- array(0, c(n_trials, n_decks))
 
-  tmp_p = rep(0, n_decks) # temporary vairable
+  tmp_p = array(0, c(n_trials, n_decks))
   
   p[1,] <- rep(1/n_decks, n_decks)
   choice[1] <- extraDistr::rcat(1, p[1,])
@@ -80,7 +83,7 @@ pvl_delta <- function(payoff, a, A, w, c){
       
         # calculate subjective utility
       u[t,d] <- ifelse(r[t-1] >= 0, 
-                       r[t-1]^A,
+                       abs(r[t-1])^A,
                        -w * abs(r[t-1])^A
                        )
                        
@@ -88,16 +91,19 @@ pvl_delta <- function(payoff, a, A, w, c){
                    ev[t-1, d] + a * (u[t, d] - ev[t-1, d]),
                    ev[t-1, d]
                    )
-      
-       # temporary calculation, could simply have been: theta*exp(ev[t,]) in R but since JAGS's exp() isn't vectorized we have to do this to copy
-      tmp_p[d] <- exp(theta*ev[t, d])
+      # for softmax
+      tmp_p[t, d] <- exp(theta * ev[t, d])
+      if (is.infinite(tmp_p[t, d])){
+        if (tmp_p[t, d] > 0){
+          tmp_p[t, d] = exp(500)
+        } 
+      } 
     }
-    
+
     # update prop
     for (d in 1:n_decks){
-      p[t,d] <- tmp_p[d]/sum(tmp_p)
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
     }
-    
     choice[t] <- extraDistr::rcat(1, p[t,]) # categorical distribution
     
     #  what reward does the agent get
@@ -109,36 +115,39 @@ pvl_delta <- function(payoff, a, A, w, c){
               ev = ev,
               p = p,
               u = u,
-              start_params = list(a = a, A = A, w = w, c = c)))
+              payoff = payoff,
+              start_params = list(a = a, A = A, w = w, theta = theta)))
 }
 ```
 
-```{r pvl_delta jags model}
+```{r pvl_delta jags model} 
+# x <- seq(-0.5, 10, by = 0.01)
+# y <- extraDistr::dhcauchy(x, 4)
+# plot(x,y)
+# 2^(-1)
+# 1/.25
 model <- "model {
-  w ~ dt(0, 1, 1)T(0,) # half cauchy with a precision of 1
-  c ~ dt(0, 1, 1)T(0,)
+  w ~ dt(0, 0.25, 1)T(0,5) # half cauchy with a precision of 0.25 (mean 0 and 1 just means cauchy - as opposed to student t)
+  theta ~ dnorm(0,1)T(0,5)
   A ~ dunif(0, 1)
   a ~ dunif(0, 1)
   
   for (d in 1:n_decks){ev[1, d] ~ dnorm(0, 0.01)}
-  
-  theta = 3^c - 1
 
   for (d in 1:n_decks){
-      tmp_p[1, d] <- theta * exp(ev[1, d])
+      tmp_p[1, d] <- exp(theta *ev[1, d])
     }
     
   for (d in 1:n_decks){
       p[1,d] <- tmp_p[1,d]/sum(tmp_p[1,1:n_decks])
     }
-  
   choice[1] ~ dcat(p[1,1:n_decks])
   
   for (t in 2:n_trials){ # for each trial
     for (d in 1:n_decks){ # for each deck
       
         # calculate subjective utility
-      u[t,d] <- ifelse(choice[t-1] >= 0, 
+      u[t,d] <- ifelse(r[t-1] >= 0, 
                        abs(r[t-1])^A,# this apparenty does not work without abs (why? - I have no idea)
                        -w * abs(r[t-1])^A
                        )
@@ -149,15 +158,15 @@ model <- "model {
                    )
     }
     for (d in 1:n_decks){
-      tmp_p[t, d] <- theta * exp(ev[t, d])
+      tmp_p[t, d] <- exp(theta * ev[t, d])
     }
     
     # update prop
     for (d in 1:n_decks){
-      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,])
     }
     
-    choice[t] ~ dcat(p[t,1:n_decks]) # categorical distribution
+    choice[t] ~ dcat(p[t,]) # categorical distribution
   }
 }
 "
@@ -172,15 +181,14 @@ $$
 $$
 where $\tau$ is precision and $\sigma$ is standard deviation
 
-```{r pvl delta sim}
-
-
-sim_dat <- pvl_delta(payoff, a = 0.3, A = 0.5, w = 2, c = (0.01+1)^(1/3) ) # c = (theta+1)^(1/3) as theta = c^3-1
+```{r pvl sim fit} 
+sim_dat <- pvl_delta(payoff, a = 0.1, A = 0.5, w = 2, theta = 1) # c = (theta+1)^(1/3) as theta = c^3-1
 d <- tibble(A = sim_dat$ev[,1],
              B = sim_dat$ev[,2],
              C = sim_dat$ev[,3],
              D = sim_dat$ev[,4], 
              trial = 1:length(sim_dat$ev[,4]))
+
 
 d_long <- d %>% 
   pivot_longer(cols = c("A", "B", "C", "D"))
@@ -188,16 +196,621 @@ d_long <- d %>%
 ggplot(d_long, aes(x = trial, y = value)) + 
   geom_line() + 
   facet_wrap(~name)
-
+sim_dat$p
 qc$plot_choice(choice = sim_dat$choices-1)
 
-samples <- jags.parallel(data = list(payoff = payoff, choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward, n_decks = ncol(payoff)), 
+samples <- jags.parallel(data = list(choice = sim_dat$choice, 
+                                     n_trials = length(sim_dat$choice), r = sim_dat$reward, n_decks = ncol(payoff)), 
                 inits = NULL, 
-                parameters.to.save = c("a", "A", "w", "c"), 
+                parameters.to.save = c("a", "A", "w", "theta"), 
                 model.file = "pvl_delta_jags.txt",
-                n.chains = 4, n.iter = 4000, n.burnin = 1000 # warm-up
+                n.chains = 4, n.iter = 5000, n.burnin = 2000 # warm-up
                 )
+samples$BUGSoutput$summary
+qc$plot_dens(x = samples$BUGSoutput$sims.list$A) + geom_vline(xintercept = sim_dat$start_params$A, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$a) + geom_vline(xintercept = sim_dat$start_params$a, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$c) + geom_vline(xintercept = sim_dat$start_params$c, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$w) + geom_vline(xintercept = sim_dat$start_params$w, color = "red") + coord_cartesian(xlim = c(0,5))
+```
+
+
+```{r orl model}
+#'@title ORL Agent
+#'@description
+#'
+#'
+#'@param a_rew learning rate for rewards
+#'@param a_pun = learning rate for punishments
+#'@param w_f influnce of win/loss frequency on valence (relative to value)
+#'@param w_p influence of perseverance on valence (rel. to value)
+#'@param decay decay for perseverance
+#'@param theta softmax heat
+#'
+#'@author
+#'K. Enevoldsen
+#'
+#'@return 
+#'
+#'
+#'@references
+#'
+#'@export
+orl <- function(payoff, a_rew, a_pun, w_f, w_p, decay) {
+  n_trials <- nrow(payoff)
+  n_decks <- ncol(payoff)
+  c <- n_decks - 1
+  
+  
+  choice <- array(0,c(n_trials))
+  r <- array(0,c(n_trials))
+  # expected value
+  ev <- array(0,c(n_trials, n_decks))
+  # expected value update
+  ev_update <- array(0,c(n_trials, n_decks))
+  # expected frequency of reward
+  ef <- array(0, c(n_trials, n_decks))
+  # (temporary use) updated expected frequency
+  ef_chosen <- array(0, c(n_trials, n_decks))
+  # (temp) updated expected frequency for not chosen decks
+  ef_not_chosen <- array(0, c(n_trials, n_decks))
+  sign_x <- array(0, c(n_trials))
+  # perseverance
+  pers <- array(0, c(n_trials, n_decks))
+  # valence
+  v <- array(0, c(n_trials, n_decks))
+  # probability for choices
+  p <- array(0,c(n_trials, n_decks))
+  tmp_p = array(0, c(n_trials, n_decks))
+  
+  
+  # choice first round
+  p[1,] <-  c(0.25, 0.25, 0.25, 0.25)
+  choice[1] <- extraDistr::rcat(1, p[1,])
+  r[1] <- payoff[1, choice[1]]
+  
+  for (t in 2:n_trials){ # for each trial
+    
+    sign_x[t-1] <- ifelse(r[t-1] >= 0, 1, -1)
+    if (r[t-1]==0){sign_x[t-1] <- 0}
+    
+    for (d in 1:n_decks){ # for each deck
+      
+      #estimated value
+      ev_update[t, d] <- ifelse(r[t-1] >= 0, 
+                                ev[t-1, d] + a_rew*(r[t-1] - ev[t-1, d]),
+                                ev[t-1, d] + a_pun*(r[t-1] - ev[t-1, d])
+                          )            
+      ev[t, d] <- ifelse(choice[t-1] == d, 
+                         ev_update[t, d],
+                         ev[t-1, d]
+                         )
+      
+      #estimated freq
+      ef_chosen[t, d] <- ifelse(r[t-1] >= 0, 
+                                ef[t-1, d] + a_rew*(sign_x[t-1] - ef[t-1, d]),
+                                ef[t-1, d] + a_pun*(sign_x[t-1] - ef[t-1, d])
+                                )
+      ef_not_chosen[t, d] <- ifelse(r[t-1] >= 0, 
+                                    ef[t-1, d] + a_pun*(-(sign_x[t-1]/c) - ef[t-1, d]),
+                                    ef[t-1, d] + a_rew*(-(sign_x[t-1]/c) - ef[t-1, d])
+                                    )       
+      ef[t,d] <- ifelse(choice[t-1] == d, 
+                   ef_chosen[t, d],
+                   ef_not_chosen[t, d]
+                   )
+      
+      # perseverence
+      pers[t, d] <- ifelse(d == choice[t-1], 
+                          1/(1+decay),
+                          pers[t-1, d]/(1+decay)
+                          )
+      
+      # valence
+      v[t, d] <- ev[t, d] + ef[t, d] * w_f + pers[t, d]*w_p
+      
+      # for softmax
+      tmp_p[t, d] <- exp(v[t, d])
+      if (is.infinite(tmp_p[t, d])){
+        if (tmp_p[t, d] > 0){
+          tmp_p[t, d] = exp(500)
+        } 
+      } 
+      
+    }
+
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[t, d]/sum(tmp_p[t,1:n_decks])
+    }
+
+    
+    choice[t] <- extraDistr::rcat(1, p[t,1:n_decks]) # categorical distribution
+    
+    #  what reward does the agent get
+    r[t] <- payoff[t, choice[t]]
+  }
+  
+  return(list(payoff = payoff,
+              reward = r, 
+              choices = choice, 
+              ev = ev,
+              p = p,
+              ef = ef,
+              pers = pers,
+              v = v,
+              start_params = list(a_rew = a_rew, a_pun = a_pun, w_f = w_f, w_p = w_p, decay = decay)))
+}
+
+sim_dat = orl(payoff, a_rew = 0.04, a_pun = 0.03, w_f = 2, w_p = 1.5, decay = 1)
+sim_dat = orl(payoff, a_rew = 0.4, a_pun = 0.3, w_f = 1.5, w_p = 1, decay = 1)
+sim_dat$payoff
+sim_dat$reward
+sim_dat$pers
+sim_dat$ef
+round(exp(sim_dat$v[4,])/sum(exp(sim_dat$v[4,])), 4)
+exp(sim_dat$v)
+round(sim_dat$p, 3)
+qc$plot_choice(choice = sim_dat$choices-1)
 
 
 ```
+
+
+```{r orl jags model}
+# x <- seq(-0.5,2,  by = 0.01)
+# # y = dt(x, 2, 1)
+# y = dhcauchy(x,1)
+# plot(x,y)
+
+model <- "model {
+  a_rew ~ dt(0, 1, 1)T(0,1)
+  a_pun ~ dt(0, 1, 1)T(0,1)
+  decay ~dt(0, 1, 1)T(0,)
+  w_f ~ dnorm(0, 1)
+  w_p ~ dnorm(0, 1)
+
+  c <- n_decks - 1
+    # choice first round
+  for (d in 1:n_decks){
+    ev[1,d] ~ dnorm(0,1)
+    ef[1,d] ~ dnorm(0,1)
+    pers[1,d] ~ dnorm(0,1)
+    
+    p[1,d] <- 0.25
+  }
+  
+  # building the model
+  for (t in 2:n_trials) {
+    
+    sign_x[t] <- ifelse(r[t-1] == 0, 0,
+                       ifelse(r[t-1]>0,1,-1)) 
+    
+    for (d in 1:n_decks) {
+      
+      
+      ev_update[t,d] <- ifelse(sign_x[t] >= 0,
+        ev[t-1, d] + (a_rew*(r[t-1] - ev[t-1,d])),
+        ev[t-1, d] + (a_pun*(r[t-1] - ev[t-1,d])))
+
+      ev[t,d] <- ifelse(choice[t-1]==d, ev_update[t,d], ev[t-1,d]) 
+
+      ef_chosen[t,d] <- ifelse(sign_x[t] >= 0,
+        ef[t-1, d] + (a_rew*(sign_x[t] - ef[t-1,d])),
+        ef[t-1, d] + (a_pun*(sign_x[t] - ef[t-1,d])))
+      
+      ef_not_chosen[t,d] <- ifelse(sign_x[t] >= 0,
+        ef[t-1, d] + (a_pun*((-sign_x[t]/3) - ef[t-1,d])),
+        ef[t-1, d] + (a_rew*((-sign_x[t]/3) - ef[t-1,d])))
+      
+      
+      ef[t,d] <- ifelse(choice[t-1]==d, ef_chosen[t,d], ef_not_chosen[t,d]) 
+      
+
+      pers[t,d] <- ifelse(choice[t-1]==d,
+                        1/(1+decay),
+                        pers[t-1,d]/(1+decay))
+
+      v[t,d] <- ev[t,d] + ef[t,d] * w_f + pers[t,d] * w_p
+      
+
+      tmp_p[t,d] <- exp(v[t,d])
+      
+    } # end d loop
+    
+    for (d in 1:n_decks) {
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,])
+    } # end second d loop
+    
+    choice[t] ~ dcat(p[t,]) # choice on trial t is a sample from a categorical distribution
+    
+  }
+
+}
+"
+
+writeLines(model, "orl_jags.txt")
+```
+
+```{r}
+sim_dat = orl(payoff/100, a_rew = 0.1, a_pun = 0.03, w_f = 1, w_p = 1.5, decay = 0.5)
+qc$plot_choice(choice = sim_dat$choices-1)
+
+
+samples <- jags.parallel(data = list(choice = sim_dat$choice, 
+                                     n_trials = length(sim_dat$choice), r = sim_dat$reward/100, n_decks = ncol(payoff)), 
+                inits = NULL, 
+                parameters.to.save = c("a_rew", "a_pun", "w_f", "w_p", "decay"), 
+                model.file = "orl_jags.txt",
+                n.chains = 4, n.iter = 2000, n.burnin = 1000 # warm-up
+                )
+
+
+qc$plot_dens(x = samples$BUGSoutput$sims.list$A) + geom_vline(xintercept = sim_dat$start_params$A, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$a) + geom_vline(xintercept = sim_dat$start_params$a, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$c) + geom_vline(xintercept = sim_dat$start_params$c, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$w) + geom_vline(xintercept = sim_dat$start_params$w, color = "red")
+```
+
+```{r VSE agent}
+# make function to generate iowa decks
+gen_iowa_decks <- function(reward = c(100, 100, 50, 50), 
+                           loss = c(250, 1250, 50, 250), 
+                           n_loss = c(5,1,5,1),
+                           n_trials = 10, replications = 10, div100 = T){
+  if (length(reward) != length(loss)){
+    stop("reward and losses should be same length")
+  }
+  r = NULL
+  l = NULL
+  for (i in 1:length(reward)){
+    r[[i]] <- as.vector(replicate(10, rep(reward[i], n_trials))) # make reward
+    l[[i]] <- as.vector(replicate(10, sample( # sample with no replace
+      c(rep(abs(loss[i]), n_loss[i]), rep(0, n_trials - n_loss[i])),
+                                             replace = F)
+      )) # make loss
+  }
+  r = matrix(unlist(r), 100)
+  l = matrix(unlist(l), 100)
+  payoff = r-l
+  
+  if (isTRUE(div100)){
+    r <- r/100
+    l <- l/100
+    payoff <- payoff/100
+  }
+  
+  return(list(reward = r,
+         loss = l,
+         payoff = payoff
+         ))
+}
+out = gen_iowa_decks()
+rew = out$reward
+loss = out$loss
+
+#'@title VSE Agent
+#'@description
+#'
+#'
+#'@param reward a vector containing reward or a list containg both loss and reward
+#'@param loss  a vector containing loss or NULL if reward contains both
+#'@param alpha learning rate (bound between 0 and 1) - 0 is no learning
+#'@param beta inverse heat. degree of exploration - beta = 0 is completely random exploration
+#'@param delta decay parameter (bounded between 0 and 1) - 0 mean higher reliance on recent outcomes
+#'@param theta value sensitivity, similar to the PVL delta model (bounded between 0 and 1)
+#'@param phi exploration bonus (unbounded)
+#'
+#'@author
+#'K. Enevoldsen
+#'
+#'@return 
+#'a list containing the choice and internal states of the agent
+#'
+#'@references
+#'Ligneul, 2019
+#'@export
+vse <- function(reward, loss = NULL, alpha, theta, delta, phi, beta){
+  if (is.list(reward)){
+    loss = reward$loss
+    reward = reward$reward
+  } 
+  if (is.null(loss) & !is.list(reward)) {
+    stop("loss is NULL but reward is not a list. Therefore the model lacks a reward")
+  }
+  n_trials <- nrow(reward) # number of trials
+  n_decks <- ncol(reward) # number of decks
+  
+  choice <- rep(0, n_trials)
+  v <- array(0, c(n_trials))
+  exploit <- array(0, c(n_trials, n_decks))
+  explore <- array(0, c(n_trials, n_decks))
+  p <- array(0, c(n_trials, n_decks))
+  tmp_p = array(0, c(n_trials, n_decks))
+  
+  p[1,] <- rep(1/n_decks, n_decks)
+  choice[1] <- extraDistr::rcat(1, p[1,])
+  
+  for (t in 2:n_trials){ # for each trial
+    
+    # calculate 'utiity'
+    v[t] <- reward[t, choice[t-1]]^theta - loss[t-1, choice[t-1]]^theta
+    
+    for (d in 1:n_decks){ # for each deck
+      exploit[t, d] <- ifelse(choice[t-1] == d,
+                              exploit[t-1, d] * delta + v[t],
+                              exploit[t-1, d] * delta)
+      explore[t, d] <- explore[t-1, d] + alpha * (phi - explore[t-1, d])
+      
+      # for softmax
+      tmp_p[t, d] <- exp(beta * (exploit[t, d] + explore[t, d]))
+      if (is.infinite(tmp_p[t, d])){
+        if (tmp_p[t, d] > 0){
+          tmp_p[t, d] = exp(500)
+        } 
+      } 
+    }
+
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+    }
+    choice[t] <- extraDistr::rcat(1, p[t,]) # categorical distribution
+
+  }
+  
+  return(list(reward = reward,
+              loss = loss,
+              choices = choice, 
+              exploit = exploit,
+              explore = explore,
+              p = p, 
+              v = v,
+              start_params = list(alpha = alpha,
+                                  theta = theta, 
+                                  delta = delta, 
+                                  phi = phi, 
+                                  beta = beta)))
+}
+```
+
+
+```{r}
+x <- seq(-0.5,7,  by = 0.01)
+y = dt(x, 0.25, 1)
+# y = dhcauchy(x,1)
+plot(x,y)
+# 
+# x <- seq(0,1,  by = 0.001)
+# y = dnorm(x, 0.5,0.25) # 0.25^(-1) = 5 (precision)
+# plot(x,y)
+
+model <- "model {
+  alpha ~ dunif(0,1)
+  theta ~dnorm(0.4, 4)T(0,1)
+  delta ~ dnorm(0.5, 4)T(0,1) # sd = 1/4
+  phi ~ dnorm(0, 0.5)
+  beta ~ dt(0, 1, 1)T(0,)
+
+    # choice first round
+  for (d in 1:n_decks){
+    explore[1,d] ~ dnorm(0,1)
+    exploit[1,d] ~ dnorm(0,1)
+    
+    p[1,d] <- 0.25
+  }
+  for (t in 2:n_trials){ # for each trial
+    
+    # calculate 'utiity'
+    v[t] <- reward[t, choice[t-1]]^theta - loss[t-1, choice[t-1]]^theta
+    
+    for (d in 1:n_decks){ # for each deck
+      exploit[t, d] <- ifelse(choice[t-1] == d,
+                              exploit[t-1, d] * delta + v[t],
+                              exploit[t-1, d] * delta)
+      explore[t, d] <- explore[t-1, d] + alpha * (phi - explore[t-1, d])
+      
+      # for softmax
+      tmp_p[t, d] <- exp(beta * (exploit[t, d] + explore[t, d]))
+    }
+
+    # update prop
+    for (d in 1:n_decks){
+      p[t,d] <- tmp_p[t,d]/sum(tmp_p[t,1:n_decks])
+    }
+    choice[t] ~ dcat(p[t,]) # categorical distribution
+  }
+
+}
+"
+
+writeLines(model, "vse_jags.txt")
+```
+
+```{r}
+sim_dat <- vse(rew, loss, alpha = 0.5, theta = 0.4, delta  = 0.5, phi = 0.8, beta = 1)
+qc$plot_choice(choice = sim_dat$choices-1)
+
+
+samples <- jags.parallel(data = list(choice = sim_dat$choice, 
+                                     reward = sim_dat$reward,
+                                     loss = sim_dat$loss,
+                                     n_trials = length(sim_dat$choice), 
+                                     r = sim_dat$reward, 
+                                     n_decks = ncol(payoff)), 
+                inits = NULL, 
+                parameters.to.save = c("alpha", "theta", "delta", "phi", "beta"), 
+                model.file = "vse_jags.txt",
+                n.chains = 4, n.iter = 2000, n.burnin = 1000 # warm-up
+                )
+
+
+qc$plot_dens(x = samples$BUGSoutput$sims.list$alpha) + 
+  geom_vline(xintercept = sim_dat$start_params$alpha, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$beta) +
+  geom_vline(xintercept = sim_dat$start_params$beta, color = "red") + 
+  coord_cartesian(xlim = c(0, 10))
+qc$plot_dens(x = samples$BUGSoutput$sims.list$delta) + 
+  geom_vline(xintercept = sim_dat$start_params$delta, color = "red")
+qc$plot_dens(x = samples$BUGSoutput$sims.list$phi) + 
+  geom_vline(xintercept = sim_dat$start_params$phi, color = "red") + 
+  coord_cartesian(xlim = c(-10, 10))
+qc$plot_dens(x = samples$BUGSoutput$sims.list$theta) + 
+  geom_vline(xintercept = sim_dat$start_params$theta, color = "red")
+
+```
+
+
+```{r parameter and model recovery}
+
+gen_fun = list(pvl = "pvl_delta(gen_iowa_decks(div100 = F)$payoff, 
+                                a = runif(1, 0.01, 0.5), A = runif(1, 0.3, 0.7), w = runif(1, 0.1, 4), theta = runif(1, 0.2, 2))",
+               vse = "vse(gen_iowa_decks(div100 = T), loss = NULL, 
+                          alpha = runif(1, 0.01, 0.99), theta = runif(1, 0.01, 0.99), delta  = runif(1, 0.01, 0.99), phi = rnorm(1, 0, 1), beta = runif(1, 0.2, 2))",
+               orl = "orl(gen_iowa_decks(div100 = T)$payoff, 
+                          a_rew = runif(1, 0.01, 0.99), a_pun = runif(1, 0.01, 0.99), w_f = rnorm(1, 0, 1), w_p = rnorm(1, 0, 1), decay = runif(1, 0.01, 0.5))") 
+params_to_save = list(pvl = c("a", "A", "w", "theta"),
+                      vse = c("theta", "alpha", "delta", "phi", "beta"),
+                      orl = c("a_rew", "a_pun", "w_f", "w_p", "decay"))
+model_filepath = list(pvl = "pvl_delta_jags.txt",
+                      vse = "vse_jags.txt",
+                      orl =  "orl_jags.txt")
+
+data_to_fit = list(pvl = "list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward, n_decks = ncol(sim_dat$payoff))",
+                   vse = "list(choice = sim_dat$choice, reward = sim_dat$reward, loss = sim_dat$loss,  n_trials = length(sim_dat$choice), r = sim_dat$reward, n_decks = ncol(sim_dat$loss))",
+                   orl = "list(choice = sim_dat$choice, n_trials = length(sim_dat$choice), r = sim_dat$reward, n_decks = ncol(sim_dat$payoff))")
+
+
+# just simulate it 100 times
+pvl_results <- jh$simulate_fit(gen_fun[1], data_to_fit[1], model_filepath[1], params_to_save[1], save_samples = T, n_sim = 100)
+vse_results <- jh$simulate_fit(gen_fun[2], data_to_fit[2], model_filepath[2], params_to_save[2], save_samples = T, n_sim = 100)
+orl_results <- jh$simulate_fit(gen_fun[3], data_to_fit[3], model_filepath[3], params_to_save[3], save_samples = T, n_sim = 100)
+
+qc$plot_dens(vse_results$samples[[32]]$BUGSoutput$sims.list$phi) + geom_vline(xintercept = vse_results$true_params[[32]]$phi)
+# saveRDS(pvl_results, "n_sim_100_pvl_2.rds")
+saveRDS(vse_results, "n_sim_100_vse_2.rds")
+# saveRDS(orl_results, "n_sim_100_orl_2.rds")
+# results <- readRDS("n_sim_100.rds")
+
+
+### parameter recovery
+get_true_actual <- function(data, agent, parameters, ci = 0.89, remove_col = c("samples", "DIC", "true_params")){
+  # currently using MAP
+  res = data %>% 
+    filter(model_generating_the_data == agent & model_fitted_to_data == agent)
+  
+  # get map
+  for (parameter in parameters){
+    res[[paste(parameter, "map", sep = "_")]] <- sapply(res$samples,  function(x) jh$jag_map(x$BUGSoutput$sims.list[[parameter]]) )
+    
+    # get CI
+    res[[paste(parameter, "ci_low", sep = "_")]]  <- sapply(res$samples,  function(x) bayestestR::ci(x$BUGSoutput$sims.list[[parameter]], ci = ci)$CI_low)
+    res[[paste(parameter, "ci_high", sep = "_")]] <- sapply(res$samples,  function(x) bayestestR::ci(x$BUGSoutput$sims.list[[parameter]], ci = ci)$CI_high)
+  }
+  
+  # get true params
+  for (parameter in parameters){
+    res[[paste(parameter, "true", sep = "_")]] <- sapply(res$true_params,  function(x) x[[parameter]] )
+  }
+  
+  if (length(remove_col)>1){
+    remove_col = colnames(res)[colnames(res) %in% remove_col]
+    res <- res %>% select(-remove_col)
+  }
+  return(res)
+}
+
+pvl_ <- get_true_actual(pvl_results, agent = "pvl", parameters =  params_to_save[[1]])
+p1 <- qc$plot_actual_predicted(actual = pvl_$a_true, predicted = pvl_$a_map,
+                          pointrange_lower = pvl_$a_ci_low,
+                          pointrange_upper = pvl_$a_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p2 <- qc$plot_actual_predicted(actual = pvl_$A_true, predicted = pvl_$A_map,
+                          pointrange_lower = pvl_$A_ci_low,
+                          pointrange_upper = pvl_$A_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p3 <- qc$plot_actual_predicted(actual = pvl_$theta_true, predicted = pvl_$theta_map,
+                          pointrange_lower = pvl_$theta_ci_low,
+                          pointrange_upper = pvl_$theta_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p4 <- qc$plot_actual_predicted(actual = pvl_$w_true, predicted = pvl_$w_map,
+                          pointrange_lower = pvl_$w_ci_low,
+                          pointrange_upper = pvl_$w_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+
+pvl_plot = (p1 + p2)/(p3 + p4)
+
+vse_ <- get_true_actual(vse_results, agent = "vse", parameters =  params_to_save[[2]])
+p1 <- qc$plot_actual_predicted(actual = vse_$theta_true, predicted = vse_$theta_map,
+                          pointrange_lower = vse_$theta_ci_low,
+                          pointrange_upper = vse_$theta_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p2 <- qc$plot_actual_predicted(actual = vse_$alpha_true, predicted = vse_$alpha_map,
+                          pointrange_lower = vse_$alpha_ci_low,
+                          pointrange_upper = vse_$alpha_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p3 <- qc$plot_actual_predicted(actual = vse_$delta_true, predicted = vse_$delta_map,
+                          pointrange_lower = vse_$delta_ci_low,
+                          pointrange_upper = vse_$delta_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p4 <- qc$plot_actual_predicted(actual = vse_$phi_true, predicted = vse_$phi_map,
+                          pointrange_lower = vse_$phi_ci_low,
+                          pointrange_upper = vse_$phi_ci_high,
+                          caption = F) 
+p5 <- qc$plot_actual_predicted(actual = vse_$beta_true, predicted = vse_$beta_map,
+                          pointrange_lower = vse_$beta_ci_low,
+                          pointrange_upper = vse_$beta_ci_high,
+                          caption = F) + coord_cartesian(xlim = c(0, 4), ylim = c(0, 4))
+
+vse_plot <- (p1 + p2)/
+  (p3 + p4)/
+  p5
+
+
+
+
+orl_ <- get_true_actual(orl_results, agent = "orl", parameters =  params_to_save[[3]])
+p1 <- qc$plot_actual_predicted(actual = orl_$a_rew_true, predicted = orl_$a_rew_map,
+                          pointrange_lower = orl_$a_rew_ci_low,
+                          pointrange_upper = orl_$a_rew_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p2 <- qc$plot_actual_predicted(actual = orl_$a_pun_true, predicted = orl_$a_pun_map,
+                          pointrange_lower = orl_$a_pun_ci_low,
+                          pointrange_upper = orl_$a_pun_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p3 <- qc$plot_actual_predicted(actual = orl_$w_f_true, predicted = orl_$w_f_map,
+                          pointrange_lower = orl_$w_f_ci_low,
+                          pointrange_upper = orl_$w_f_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p4 <- qc$plot_actual_predicted(actual = orl_$w_p_true, predicted = orl_$w_p_map,
+                          pointrange_lower = orl_$w_p_ci_low,
+                          pointrange_upper = orl_$w_p_ci_high,
+                          caption = F) +
+  xlim(0, NA) + ylim(0, NA)
+p5 <- qc$plot_actual_predicted(actual = orl_$decay_true, predicted = orl_$decay_map,
+                          pointrange_lower = orl_$decay_ci_low,
+                          pointrange_upper = orl_$decay_ci_high,
+                          caption = F) + coord_cartesian(xlim = c(0, .75), ylim = c(0, 1))
+
+
+orl_plot <- (p1 + p2)/
+  (p3 + p4)/
+  p5
+
+pvl_plot
+vse_plot
+orl_plot
+
+```
+
+
 
