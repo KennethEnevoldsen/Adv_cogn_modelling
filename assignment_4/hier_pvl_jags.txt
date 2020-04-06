@@ -1,0 +1,61 @@
+model {
+  # group level priors
+  mu_w ~ dt(0, 0.25, 1)T(0,5) # half cauchy with a precision of 0.25 (mean 0 and 1 just means cauchy - as opposed to student t)
+  mu_theta ~ dnorm(0,1)T(0,)
+  mu_A ~ dunif(0.001, 0.999)
+  mu_a ~ dbeta(2, 4)T(0.001,)
+  
+  sigma_w ~ dgamma(0.005, 0.01)T(0.001,)
+  sigma_theta ~ dgamma(0.01, 0.01)T(0.001,)
+  sigma_A ~ dgamma(0.01, 0.01)T(0.001,)
+  sigma_a ~ dgamma(0.005, 0.01)T(0.001,)
+
+  for (s in 1:subject){
+    w[s] ~ dnorm(mu_w, sigma_w)T(0,5)
+    theta[s] ~ dnorm(mu_theta, sigma_theta)T(0,)
+    A[s] ~ dnorm(mu_A, sigma_A)T(0, 1)
+    a[s] ~ dnorm(mu_a, sigma_a)T(0, 1)
+    
+    for (d in 1:n_decks){
+      ev[s, 1, d] ~ dnorm(0, 0.01)
+    }
+  
+    for (d in 1:n_decks){
+        tmp_p[s, 1, d] <- exp(theta[s] *ev[s, 1, d])
+      }
+      
+    for (d in 1:n_decks){
+        p[s, 1,d] <- tmp_p[s, 1,d]/sum(tmp_p[s, 1,1:n_decks])
+    }
+    
+    choice[s, 1] ~ dcat(p[s, 1, 1:n_decks])
+    
+    for (t in 2:n_trials[s]){ # for each trial
+      for (d in 1:n_decks){ # for each deck
+        
+          # calculate subjective utility
+        u[s, t, d] <- ifelse(r[s, t-1] >= 0, 
+                         abs(r[s, t-1])^A[s],  # this apparenty does not work without abs (why? - I have no idea)
+                         -w[s] * abs(r[s, t-1])^A[s]
+                         )
+
+                         
+        ev[s, t, d] <- ifelse(choice[s, t-1] == d, 
+                     ev[s, t-1, d] + a[s] * (u[s, t, d] - ev[s, t-1, d]),
+                     ev[s, t-1, d]
+                     )
+      }
+      for (d in 1:n_decks){
+        tmp_p[s, t, d] <- exp(theta[s] * ev[s, t, d])
+      }
+      
+      # update prop
+      for (d in 1:n_decks){
+        p[s, t, d] <- tmp_p[s, t, d]/sum(tmp_p[s, t,])
+      }
+      
+      choice[s, t] ~ dcat(p[s, t,]) # categorical distribution
+    }
+  }
+}
+

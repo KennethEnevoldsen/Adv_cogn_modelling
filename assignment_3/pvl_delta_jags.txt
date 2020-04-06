@@ -1,5 +1,5 @@
 model {
-w ~ dt(0, 0.25, 1)T(0,5) # half cauchy with a precision of 0.25 (mean 0 and 1 just means cauchy - as opposed to student t)
+  w ~ dnorm(0, 0.25)T(0,5) # half cauchy with a precision of 0.25 (mean 0 and 1 just means cauchy - as opposed to student t)
   theta ~ dnorm(0,1)T(0,)
   A ~ dunif(0, 1)
   a ~ dunif(0, 1)

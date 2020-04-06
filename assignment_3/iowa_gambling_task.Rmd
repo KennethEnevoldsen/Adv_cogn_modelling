@@ -276,7 +276,7 @@ orl <- function(payoff, a_rew, a_pun, w_f, w_p, decay) {
     for (d in 1:n_decks){ # for each deck
       
       #estimated value
-      ev_update[t, d] <- ifelse(r[t-1] >= 0, 
+      ev_update[t, d] <- ifelse(r[t-1] >= 0,
                                 ev[t-1, d] + a_rew*(r[t-1] - ev[t-1, d]),
                                 ev[t-1, d] + a_pun*(r[t-1] - ev[t-1, d])
                           )            
@@ -519,7 +519,8 @@ vse <- function(reward, loss = NULL, alpha, theta, delta, phi, beta){
   }
   n_trials <- nrow(reward) # number of trials
   n_decks <- ncol(reward) # number of decks
-  
+  r <- array(0, c(n_trials))
+  l <- array(0, c(n_trials))
   choice <- rep(0, n_trials)
   v <- array(0, c(n_trials))
   exploit <- array(0, c(n_trials, n_decks))
@@ -533,7 +534,9 @@ vse <- function(reward, loss = NULL, alpha, theta, delta, phi, beta){
   for (t in 2:n_trials){ # for each trial
     
     # calculate 'utiity'
-    v[t] <- reward[t, choice[t-1]]^theta - loss[t-1, choice[t-1]]^theta
+    r[t-1] <- reward[t-1, choice[t-1]]
+    l[t-1] <- loss[t-1, choice[t-1]]
+    v[t] <- r[t-1]^theta - l[t-1]^theta
     
     for (d in 1:n_decks){ # for each deck
       exploit[t, d] <- ifelse(choice[t-1] == d,
@@ -558,8 +561,8 @@ vse <- function(reward, loss = NULL, alpha, theta, delta, phi, beta){
 
   }
   
-  return(list(reward = reward,
-              loss = loss,
+  return(list(reward = r,
+              loss = l,
               choices = choice, 
               exploit = exploit,
               explore = explore,
@@ -601,7 +604,7 @@ model <- "model {
   for (t in 2:n_trials){ # for each trial
     
     # calculate 'utiity'
-    v[t] <- reward[t, choice[t-1]]^theta - loss[t-1, choice[t-1]]^theta
+    v[t] <- reward[t-1]^theta - loss[t-1]^theta
     
     for (d in 1:n_decks){ # for each deck
       exploit[t, d] <- ifelse(choice[t-1] == d,
@@ -642,7 +645,7 @@ samples <- jags.parallel(data = list(choice = sim_dat$choice,
                 model.file = "vse_jags.txt",
                 n.chains = 4, n.iter = 2000, n.burnin = 1000 # warm-up
                 )
-
+samples
 
 qc$plot_dens(x = samples$BUGSoutput$sims.list$alpha) + 
   geom_vline(xintercept = sim_dat$start_params$alpha, color = "red")
@@ -687,10 +690,12 @@ orl_results <- jh$simulate_fit(gen_fun[3], data_to_fit[3], model_filepath[3], pa
 
 qc$plot_dens(vse_results$samples[[32]]$BUGSoutput$sims.list$phi) + geom_vline(xintercept = vse_results$true_params[[32]]$phi)
 # saveRDS(pvl_results, "n_sim_100_pvl_2.rds")
-saveRDS(vse_results, "n_sim_100_vse_2.rds")
+# saveRDS(vse_results, "n_sim_100_vse_2.rds")
 # saveRDS(orl_results, "n_sim_100_orl_2.rds")
 # results <- readRDS("n_sim_100.rds")
-
+# pvl_results <- readRDS("n_sim_100_pvl_2.rds")
+# vse_results <- readRDS("n_sim_100_vse_2.rds")
+# orl_results <- readRDS("n_sim_100_orl_2.rds")
 
 ### parameter recovery
 get_true_actual <- function(data, agent, parameters, ci = 0.89, remove_col = c("samples", "DIC", "true_params")){
@@ -724,41 +729,46 @@ p1 <- qc$plot_actual_predicted(actual = pvl_$a_true, predicted = pvl_$a_map,
                           pointrange_lower = pvl_$a_ci_low,
                           pointrange_upper = pvl_$a_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p2 <- qc$plot_actual_predicted(actual = pvl_$A_true, predicted = pvl_$A_map,
                           pointrange_lower = pvl_$A_ci_low,
                           pointrange_upper = pvl_$A_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1))
 p3 <- qc$plot_actual_predicted(actual = pvl_$theta_true, predicted = pvl_$theta_map,
                           pointrange_lower = pvl_$theta_ci_low,
                           pointrange_upper = pvl_$theta_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p4 <- qc$plot_actual_predicted(actual = pvl_$w_true, predicted = pvl_$w_map,
                           pointrange_lower = pvl_$w_ci_low,
                           pointrange_upper = pvl_$w_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+ coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 
 pvl_plot = (p1 + p2)/(p3 + p4)
+
+ggsave("~/Desktop/pvl_a.png", p1, device = "png")
+ggsave("~/Desktop/pvl_A_stor.png", p2, device = "png")
+ggsave("~/Desktop/pvl_theta.png", p3, device = "png")
+ggsave("~/Desktop/pvl_w.png", p4, device = "png")
 
 vse_ <- get_true_actual(vse_results, agent = "vse", parameters =  params_to_save[[2]])
 p1 <- qc$plot_actual_predicted(actual = vse_$theta_true, predicted = vse_$theta_map,
                           pointrange_lower = vse_$theta_ci_low,
                           pointrange_upper = vse_$theta_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p2 <- qc$plot_actual_predicted(actual = vse_$alpha_true, predicted = vse_$alpha_map,
                           pointrange_lower = vse_$alpha_ci_low,
                           pointrange_upper = vse_$alpha_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p3 <- qc$plot_actual_predicted(actual = vse_$delta_true, predicted = vse_$delta_map,
                           pointrange_lower = vse_$delta_ci_low,
                           pointrange_upper = vse_$delta_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p4 <- qc$plot_actual_predicted(actual = vse_$phi_true, predicted = vse_$phi_map,
                           pointrange_lower = vse_$phi_ci_low,
                           pointrange_upper = vse_$phi_ci_high,
@@ -766,45 +776,56 @@ p4 <- qc$plot_actual_predicted(actual = vse_$phi_true, predicted = vse_$phi_map,
 p5 <- qc$plot_actual_predicted(actual = vse_$beta_true, predicted = vse_$beta_map,
                           pointrange_lower = vse_$beta_ci_low,
                           pointrange_upper = vse_$beta_ci_high,
-                          caption = F) + coord_cartesian(xlim = c(0, 4), ylim = c(0, 4))
+                          caption = F) + 
+  coord_cartesian(xlim = c(0, 4), ylim = c(0, 4))
 
 vse_plot <- (p1 + p2)/
   (p3 + p4)/
   p5
 
-
-
+ggsave("~/Desktop/vse_theta.png", p1, device = "png")
+ggsave("~/Desktop/vse_alpha.png", p2, device = "png")
+ggsave("~/Desktop/vse_delta.png", p3, device = "png")
+ggsave("~/Desktop/vse_phi.png", p4, device = "png")
+ggsave("~/Desktop/vse_beta.png", p5, device = "png")
 
 orl_ <- get_true_actual(orl_results, agent = "orl", parameters =  params_to_save[[3]])
 p1 <- qc$plot_actual_predicted(actual = orl_$a_rew_true, predicted = orl_$a_rew_map,
                           pointrange_lower = orl_$a_rew_ci_low,
                           pointrange_upper = orl_$a_rew_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  ggplot2::coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p2 <- qc$plot_actual_predicted(actual = orl_$a_pun_true, predicted = orl_$a_pun_map,
                           pointrange_lower = orl_$a_pun_ci_low,
                           pointrange_upper = orl_$a_pun_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p3 <- qc$plot_actual_predicted(actual = orl_$w_f_true, predicted = orl_$w_f_map,
                           pointrange_lower = orl_$w_f_ci_low,
                           pointrange_upper = orl_$w_f_ci_high,
                           caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p4 <- qc$plot_actual_predicted(actual = orl_$w_p_true, predicted = orl_$w_p_map,
                           pointrange_lower = orl_$w_p_ci_low,
                           pointrange_upper = orl_$w_p_ci_high,
-                          caption = F) +
-  xlim(0, NA) + ylim(0, NA)
+                          caption = F) + 
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA))
 p5 <- qc$plot_actual_predicted(actual = orl_$decay_true, predicted = orl_$decay_map,
                           pointrange_lower = orl_$decay_ci_low,
                           pointrange_upper = orl_$decay_ci_high,
-                          caption = F) + coord_cartesian(xlim = c(0, .75), ylim = c(0, 1))
+                          caption = F) + 
+  coord_cartesian(xlim = c(0, .75), ylim = c(0, 1))
 
 
 orl_plot <- (p1 + p2)/
   (p3 + p4)/
   p5
+
+ggsave("~/Desktop/orl_a_rew.png", p1, device = "png")
+ggsave("~/Desktop/orl_a_pun.png", p2, device = "png")
+ggsave("~/Desktop/orl_w_f.png", p3, device = "png")
+ggsave("~/Desktop/orl_w_p.png", p4, device = "png")
+ggsave("~/Desktop/orl_decay.png", p5, device = "png")
 
 pvl_plot
 vse_plot

@@ -1,6 +1,6 @@
 model {
   alpha ~ dunif(0,1)
-  theta ~ dnorm(0.4, 4)T(0,1)
+  theta ~dnorm(0.4, 4)T(0,1)
   delta ~ dnorm(0.5, 4)T(0,1) # sd = 1/4
   phi ~ dnorm(0, 0.5)
   beta ~ dt(0, 1, 1)T(0,)

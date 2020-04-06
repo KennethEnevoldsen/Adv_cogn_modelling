@@ -220,12 +220,12 @@ plot_actual_predicted <- function(actual, predicted, pointrange_lower = NULL, po
   } else {c_text = ""}
   
   
-  p <- ggplot2::ggplot(data = d, aes(x = actual, y = predicted)) + 
+  p <- ggplot2::ggplot(data = d, ggplot2::aes(x = actual, y = predicted)) + 
     ggplot2::geom_point(alpha = 0.5) +
     ggplot2::geom_abline(intercept = 0, slope = 1, linetype = "dashed") + 
     ggplot2::labs(title = ' ', y = 'Predicted', x = 'Actual', caption = c_text) + 
     ggplot2::theme_bw() + 
-    ggplot2::theme(panel.border = element_blank())
+    ggplot2::theme(panel.border = ggplot2::element_blank())
   
   if (add_rmse  | add_r2){
     e <- Metrics::rmse(d$actual, d$predicted)
@@ -244,7 +244,7 @@ plot_actual_predicted <- function(actual, predicted, pointrange_lower = NULL, po
       ggplot2::annotate("text", x = xc, y = c(yc, yc*0.85), label = lab_text, parse = T)
   }
   if (! (is.null(pointrange_lower) | is.null(pointrange_upper))){
-    p <-  p + geom_pointrange(aes(x = actual,
+    p <-  p + ggplot2::geom_pointrange(ggplot2::aes(x = actual,
                                   ymin = pointrange_lower, 
                                   ymax = pointrange_upper), 
                               alpha = pointrange_alpha)

@@ -1,0 +1,52 @@
+model {
+  # group level priors
+  mu_alpha ~ dbeta(2, 4)T(0.001,)
+  mu_theta ~ dnorm(0.4, 4)T(0,1)
+  mu_delta ~ dnorm(0.5, 4)T(0,1)
+  mu_phi ~   dnorm(0, 0.4)
+  mu_beta ~  dt(0, 1, 1)T(0.001,)
+  
+  sigma_alpha ~ dgamma(0.005, 0.01)T(0.001,)
+  sigma_theta ~ dgamma(0.005,  0.01)T(0.001,)
+  sigma_delta ~ dgamma(0.005,  0.01)T(0.001,)
+  sigma_phi ~   dgamma(0.01,  0.01)T(0.001,)
+  sigma_beta ~  dgamma(0.005,  0.01)T(0.001,)
+  
+  for (s in 1:subject){
+    alpha[s] ~ dnorm(mu_alpha, sigma_alpha)T(0, 1)
+    theta[s] ~ dnorm(mu_theta, sigma_theta)T(0, 1)
+    delta[s] ~ dnorm(mu_delta, sigma_delta)T(0, 1)  # sd = 1/4
+    phi[s] ~ dnorm(mu_phi, sigma_phi)
+    beta[s] ~ dnorm(mu_beta, sigma_beta)T(0,)
+  
+      # choice first round
+    for (d in 1:n_decks){
+      explore[s, 1,d] ~ dnorm(0, 1)
+      exploit[s, 1,d] ~ dnorm(0, 1)
+
+      p[s, 1,d] <- 0.25
+    }
+    
+    for (t in 2:n_trials[s]){  # for each trial
+      
+      # calculate 'utiity'
+      v[s, t] <- reward[s, t-1]^theta[s] - loss[s, t-1]^theta[s]
+      
+      for (d in 1:n_decks){ # for each deck
+        exploit[s, t, d] <- ifelse(choice[s, t-1] == d,
+                                exploit[s, t-1, d] * delta[s] + v[s, t],
+                                exploit[s, t-1, d] * delta[s])
+        explore[s, t, d] <- explore[s, t-1, d] + alpha[s] * (phi[s] - explore[s, t-1, d])
+        
+        # for softmax
+        tmp_p[s, t, d] <- exp(beta[s] * (exploit[s, t, d] + explore[s, t, d]))
+      }
+  
+      # update prop
+      for (d in 1:n_decks){
+        p[s, t,d] <- tmp_p[s, t,d]/sum(tmp_p[s, t,1:n_decks])
+      }
+      choice[s, t] ~ dcat(p[s, t,]) # categorical distribution
+    }
+  }
+}

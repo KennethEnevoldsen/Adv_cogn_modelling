@@ -1,0 +1,79 @@
+model {
+  # group level priors
+  mu_a_rew ~ dt(0, 1, 1)T(0,1)
+  mu_a_pun ~ dt(0, 1, 1)T(0,1)
+  mu_decay ~ dt(0, 1, 1)T(0,)
+  mu_w_f ~   dnorm(0, 1)
+  mu_w_p ~   dnorm(0, 1)
+  
+  sigma_a_rew ~ dgamma(0.005, 0.01)T(0.001,)
+  sigma_a_pun ~ dgamma(0.005, 0.01)T(0.001,)
+  sigma_decay ~ dgamma(0.01,  0.01)T(0.001,)
+  sigma_w_f ~   dgamma(0.01,  0.01)T(0.001,)
+  sigma_w_p ~   dgamma(0.01,  0.01)T(0.001,)
+  
+  for (s in 1:subject){
+    a_rew[s] ~ dnorm(mu_a_rew, sigma_a_rew)T(0,1)
+    a_pun[s] ~ dnorm(mu_a_pun, sigma_a_pun)T(0,1)
+    decay[s] ~ dnorm(mu_decay, sigma_decay)T(0,)
+    w_f[s] ~ dnorm(mu_w_f, sigma_w_f)
+    w_p[s] ~ dnorm(mu_w_p, sigma_w_p)
+  
+    c <- n_decks - 1
+      # choice first round
+    for (d in 1:n_decks){
+      ev[s, 1,d] ~ dnorm(0,1)
+      ef[s, 1,d] ~ dnorm(0,1)
+      pers[s, 1,d] ~ dnorm(0,1)
+      
+      p[s, 1, d] <- 0.25
+    }
+    
+    # building the model
+    for (t in 2:n_trials[s]) {
+      
+      sign_x[s, t] <- ifelse(r[s, t-1] == 0, 0,
+                         ifelse(r[s, t-1]>0,1,-1)) 
+      
+      for (d in 1:n_decks) {
+        
+        
+        ev_update[s, t,d] <- ifelse(sign_x[s, t] >= 0,
+          ev[s, t-1, d] + (a_rew[s]*(r[s, t-1] - ev[s, t-1,d])),
+          ev[s, t-1, d] + (a_pun[s]*(r[s, t-1] - ev[s, t-1,d])))
+  
+        ev[s, t,d] <- ifelse(choice[s, t-1]==d, ev_update[s, t,d], ev[s, t-1,d]) 
+  
+        ef_chosen[s, t,d] <- ifelse(sign_x[s, t] >= 0,
+          ef[s, t-1, d] + (a_rew[s]*(sign_x[s, t] - ef[s, t-1,d])),
+          ef[s, t-1, d] + (a_pun[s]*(sign_x[s, t] - ef[s, t-1,d])))
+        
+        ef_not_chosen[s, t,d] <- ifelse(sign_x[s, t] >= 0,
+          ef[s, t-1, d] + (a_pun[s]*((-sign_x[s, t]/3) - ef[s, t-1, d])),
+          ef[s, t-1, d] + (a_rew[s]*((-sign_x[s, t]/3) - ef[s, t-1, d])))
+        
+        
+        ef[s, t,d] <- ifelse(choice[s, t-1]==d, ef_chosen[s, t, d], ef_not_chosen[s, t, d]) 
+        
+  
+        pers[s, t,d] <- ifelse(choice[s, t-1]==d,
+                          1/(1+decay[s]),
+                          pers[s, t-1,d]/(1+decay[s]))
+  
+        v[s, t, d] <- ev[s, t, d] + ef[s, t, d] * w_f[s] + pers[s, t, d] * w_p[s]
+        
+  
+        tmp_p[s, t, d] <- exp(v[s, t, d])
+        
+      } # end d loop
+      
+      for (d in 1:n_decks) {
+        p[s, t, d] <- tmp_p[s, t, d]/sum(tmp_p[s, t,])
+      } # end second d loop
+      
+      choice[s, t] ~ dcat(p[s, t,]) # choice on trial t is a sample from a categorical distribution
+      
+    }
+  }
+}
+
