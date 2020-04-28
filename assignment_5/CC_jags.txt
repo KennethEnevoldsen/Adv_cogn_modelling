@@ -1,0 +1,41 @@
+model {
+
+ # data is n_agents, n_trials, index of vals, matrix of contributions (c) and average contribution (ga)
+ 
+ for (n in 1:n_agents) {
+ 
+  omega_1[n] ~ dnorm(0,1)T(0,1)
+  lambda[n] ~ dnorm(0,1)T(0,1)
+  gamma[n] ~ dnorm(0,1)T(0,1)
+  p_0[n] <- 0
+  p_beta ~ dunif(0,1)
+  
+  for (i in 1:length(vals)) {
+    p_vals[n, i] <- p_0[n] + (p_beta[n] * vals[i])
+  }
+  
+  omega[n, 1] <- omega1[n]
+  
+  gb[n, 1] <- c[n, 1]
+  
+  mu_c[n, 1] <- ga[1]
+ }
+ 
+ for (t in 2:n_trials) {
+ 
+  for (n in 1:n_agents) {
+  
+    gb[n t] <-  (gamma[n] * (gb[n, t-1])) + ((1 - gamma[n]) * (ga[t-1]))
+    
+    pval_index[n, t] <- ifelse(round(gb[n, t]) > 1, round(gb[n, t]), 1)
+    
+    p[n, t] <- p_vals[n, pval_index[n, t]]
+    
+    omega[n, t] <- omega[n, t-1] * (1 - lambda[n]) * exp(-lambda[n])
+    
+    mu_c[n, t] <- ((omega[n, t]) * gb[n, t]) + ((1 - omega[n, t]) * p[n, t])
+    
+    c[n, t] ~ dnorm(mu_c[n, t], 0.1)
+  }
+ }
+}
