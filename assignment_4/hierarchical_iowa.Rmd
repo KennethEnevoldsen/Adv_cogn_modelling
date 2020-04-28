@@ -8,21 +8,14 @@ editor_options:
 ---
 
 ```{r setup}
-pacman::p_load(pacman, tidyverse, R2jags, modules, patchwork, cvms,
-               extraDistr # for extra destributions
-               )
-set.seed(1994)
+pacman::p_load(pacman, tidyverse, R2jags)
 
-agents <- modules::import(module = "../jags_helpfuns/agents", attach = T, doc = T)
-modules::reload(agents)
-qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
-modules::reload(qc)
-jh <- modules::import("../jags_helpfuns/jags_helpfuns", attach = T, doc = T)
-modules::reload(jh)
+set.seed(1994)
 ```
 
 ```{r data wrangling}
 iowa <- read_delim("rawData/IGTdata_healthy_control.txt", delim = "\t")
+iowa <- read_delim("rawData/IGTdata_amphetamine.txt", delim = "\t")
 
 choices <- iowa %>%
   select(trial, deck, subjID) %>%
@@ -36,7 +29,7 @@ losses <- iowa %>%
   select(trial, loss, subjID) %>%
   pivot_wider(names_from  = subjID, values_from =  loss) %>%
   select(-trial)
-payoff <- gains-losses
+payoff <- gains-abs(losses)
 ```
 
 ```{r posterior predictive checks}
@@ -65,7 +58,7 @@ pos_pred_check <- function(true_val = choices[[1]],
     res <- tmp$val[which.max(tmp$Freq)]   # take the one with the highest freq
     return(res)
   }
-  trials = 1:length(true_val)
+  trials = 1:length(na.omit(true_val))
   cat("\t sampling from posterior to get most likely deck\n")
   guess_val <- sapply(trials, function(trial)  get_most_lik(trial, 4), simplify = T)
   return(sum(true_val == guess_val)/length(true_val)) # return the probability that the model will guess correct for a given participant
@@ -78,13 +71,14 @@ for (x in 1:n_part){
   cat("Running participant ", x, " out of ", n_part, "\n", sep = "")
   res[[x]] <- pos_pred_check(true_val = choices[[x]], 
                  data_to_fit = list(choice = choices[[x]], 
-                                   n_trials = length(choices[[x]]), 
+                                   n_trials = length(na.omit(choices[[x]])), 
                                    r = payoff[[x]]/100, n_decks = 4), 
                  probability_param = "p", 
                  model_file = "../assignment_3/orl_jags.txt")
   cat("\t p correct were: ", res[[x]], "\n", sep = "")
 }
 orl_res <- res
+saveRDS(orl_res, "pp_orl_heroin.rds")
 
 # PVL
 res = NULL
@@ -92,14 +86,14 @@ for (x in 1:n_part){
   cat("Running participant ", x, " out of ", n_part, "\n", sep = "")
   res[[x]] <- pos_pred_check(true_val = choices[[x]], 
                  data_to_fit = list(choice = choices[[x]],
-                                    n_trials = length(choices[[x]]), 
+                                    n_trials = length(na.omit(choices[[x]])), 
                                     r = payoff[[x]], n_decks =4), 
                  probability_param = "p", 
                  model_file = "../assignment_3/pvl_delta_jags.txt")
   cat("\t p correct were: ", res[[x]], "\n", sep = "")
 }
 pvl_res <- res
-
+saveRDS(pvl_res, "pp_pvl_heroin.rds")
 # VSE
 res = NULL
 for (x in 1:n_part){
@@ -108,12 +102,13 @@ for (x in 1:n_part){
                  data_to_fit = list(choice = choices[[x]],
                                     reward = gains[[x]]/100, 
                                     loss = abs(losses[[x]]/100),
-                                    n_trials = length(choices[[x]]), n_decks =4), 
+                                    n_trials = length(na.omit(choices[[x]])), n_decks =4), 
                  probability_param = "p", 
                  model_file = "../assignment_3/vse_jags.txt")
   cat("\t p correct were: ", res[[x]], "\n", sep = "")
 }
 vse_res <- res
+saveRDS(vse_res, "pp_vse_heroin.rds")
 length(gains[[x]])
 ```
 
@@ -152,12 +147,12 @@ samples <- jags.parallel(data = data_to_fit_vse,
 end_time <- Sys.time()
 time_taken = end_time - start_time
 samples
-saveRDS(samples, "hier_vse.rds")
+saveRDS(samples, "hier_vse_heroin.rds")
 # readRDS("hier_vse.rds")
 time_taken
 ```
 
-```{r}
+```{r pvl}
 params_to_save_pvl = c("mu_w",
                       "mu_theta",
                       "mu_A",
@@ -169,8 +164,8 @@ params_to_save_pvl = c("mu_w",
 
 n_trials = apply(t(choices), 1, function(x) length(na.omit(x)))
 
-n_part <- 2# 48
-data_to_fit_orl <- list(choice = t(choices)[1:n_part,],
+n_part <- 48# 48
+data_to_fit_pvl <- list(choice = t(choices)[1:n_part,],
                         n_trials = n_trials[1:n_part], 
                         r = t(payoff)[1:n_part,],
                         subject = nrow(t(choices)[1:n_part,]),
@@ -187,7 +182,7 @@ samples <- jags.parallel(data = data_to_fit_pvl,
 end_time <- Sys.time()
 time_taken = end_time - start_time
 samples
-saveRDS(samples, "hier_pvl.rds")
+saveRDS(samples, "hier_pvl_heroin.rds")
 time_taken
 ```
 
@@ -206,7 +201,7 @@ params_to_save_orl = c("mu_a_rew",
 
 n_trials = apply(t(choices), 1, function(x) length(na.omit(x)))
 
-n_part <- 2  # 48
+n_part <- 48  # 48
 data_to_fit_orl <- list(choice = t(choices)[1:n_part,],
                         n_trials = n_trials[1:n_part], 
                         r = t(payoff)[1:n_part,]/100,
@@ -218,14 +213,17 @@ samples <- NULL
 samples <- jags.parallel(data = data_to_fit_orl,
               inits = NULL, 
               parameters.to.save = params_to_save_orl, 
-              model.file = "hier_pvl_jags.txt",
+              model.file = "hier_orl_jags.txt",
               n.chains = 4, n.iter = 3000, n.burnin = 1000, n.thin = 1  # warm-up
               )
 end_time <- Sys.time()
 time_taken = end_time - start_time
 samples
-saveRDS(samples, "hier_orl.rds")
+saveRDS(samples, "hier_orl_heroin.rds")
 time_taken
 ```
 
+```{r}
+
+```
 

@@ -1,0 +1,24 @@
+model {
+  alpha ~ dnorm (0, .1)
+  mu ~ dnorm(0, .1)
+  
+  g_lambda ~ dgamma(.1, .1) # var between subjects
+  
+  for (s in 1:n_sub_c){
+    s_lambda_c[s] ~ dgamma(.1, .1)
+    
+    s_mu_c[s] ~ dnorm(mu + alpha/2, g_lambda)
+    for (t in 1:n_trials_c[s]){
+      rew_c[s, t] ~ dnorm(s_mu_c[s], s_lambda_c[s])
+    }
+  }
+  for (s in 1:n_sub_o){
+    s_lambda_o[s] ~ dgamma(.1, .1)
+    
+    s_mu_o[s] ~ dnorm(mu - alpha/2, g_lambda)
+    for (t in 1:n_trials_o[s]){
+      rew_o[s, t] ~ dnorm(s_mu_o[s], s_lambda_o[s])
+    }
+  }
+}
+

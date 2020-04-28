@@ -1,0 +1,282 @@
+---
+title: "group_comparison"
+author: "K. Enevoldsen"
+date: "4/14/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup}
+pacman::p_load(pacman, tidyverse, R2jags, patchwork, polspline, knitr, kableExtra)
+qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
+modules::reload(qc)
+
+set.seed(1994)
+```
+
+
+```{r data wrangling}
+iowa_c <- read_delim("rawData/IGTdata_healthy_control.txt", delim = "\t")
+
+choices_c <- iowa_c %>%
+  select(trial, deck, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = deck) %>%
+  select(-trial)
+gains_c <- iowa_c %>%
+  select(trial, gain, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = gain) %>%
+  select(-trial)
+losses_c <- iowa_c %>%
+  select(trial, loss, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = loss) %>%
+  select(-trial)
+payoff_c <- gains_c- abs(losses_c)
+
+iowa_o <- read_delim("rawData/IGTdata_heroin.txt", delim = "\t")
+
+choices_o <- iowa_o %>%
+  select(trial, deck, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = deck) %>%
+  select(-trial)
+gains_o <- iowa_o %>%
+  select(trial, gain, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = gain) %>%
+  select(-trial)
+losses_o <- iowa_o %>%
+  select(trial, loss, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = loss) %>%
+  select(-trial)
+payoff_o <- gains_o - abs(losses_o)
+
+iowa_a <- read_delim("rawData/IGTdata_amphetamine.txt", delim = "\t")
+
+choices_a <- iowa_a %>%
+  select(trial, deck, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = deck) %>%
+  select(-trial)
+gains_a <- iowa_a %>%
+  select(trial, gain, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = gain) %>%
+  select(-trial)
+losses_a <- iowa_a %>%
+  select(trial, loss, subjID) %>%
+  pivot_wider(names_from = subjID, values_from = loss) %>%
+  select(-trial)
+payoff_a <- gains_a - abs(losses_a)
+```
+
+
+```{r}
+
+n_trials_c <- apply(t(payoff_c), 1, function(x) length(na.omit(x)))
+n_trials_o <- apply(t(payoff_o), 1, function(x) length(na.omit(x)))
+n_trials_a <- apply(t(payoff_a), 1, function(x) length(na.omit(x)))
+
+
+samples_o <- jags.parallel(data = list(n_trials_c = n_trials_c,
+                                     n_trials_o = n_trials_o,
+                                     rew_c = t(payoff_c)/100,
+                                     rew_o = t(payoff_o)/100,
+                                     n_sub_c = nrow(t(payoff_c)),
+                                     n_sub_o = nrow(t(payoff_o))
+                                     ),
+              inits = NULL, 
+              parameters.to.save = c("alpha", "mu"), 
+              model.file = "group_comparison_jags.txt",
+              n.chains = 4, n.iter = 3000, n.burnin = 1000, n.thin = 1 # warm-up
+              )
+saveRDS(samples_o, "hier_ttest_group_opi.rds")
+samples_a <- jags.parallel(data = list(n_trials_c = n_trials_c,
+                                     n_trials_o = n_trials_a,
+                                     rew_c = t(payoff_c)/100,
+                                     rew_o = t(payoff_a)/100,
+                                     n_sub_c = nrow(t(payoff_c)),
+                                     n_sub_o = nrow(t(payoff_a))
+                                     ),
+              inits = NULL, 
+              parameters.to.save = c("alpha", "mu"), 
+              model.file = "group_comparison_jags.txt",
+              n.chains = 4, n.iter = 3000, n.burnin = 1000, n.thin = 1 # warm-up
+              )
+saveRDS(samples_a, "hier_ttest_group_amp.rds")
+p1 <- qc$plot_dens(samples_o$BUGSoutput$sims.list$alpha) + ggtitle("alpha_opiods")
+p2 <- qc$plot_dens(samples_a$BUGSoutput$sims.list$alpha) + ggtitle("alpha_amphetamine")
+p1_m <- qc$plot_dens(samples_o$BUGSoutput$sims.list$mu) + ggtitle("mu_opiods")
+p2_m <- qc$plot_dens(samples_a$BUGSoutput$sims.list$mu) + ggtitle("mu_amphetamine")
+
+
+(p1 + p1_m) / (p2 + p2_m)
+
+# calc bayes factor
+f_post_o <- logspline(samples_o$BUGSoutput$sims.list$alpha)
+null_post_o <- dlogspline(0, f_post_o)
+
+f_post_a <- logspline(samples_a$BUGSoutput$sims.list$alpha)
+null_post_a <- dlogspline(0, f_post_a)
+
+null_prior <- dnorm(0, 0, (1/sqrt(.1)))
+
+# bayes factor
+null_post_o/null_prior # opiods  29:1 for the NULL
+null_post_a/null_prior # amphetamine 45:1 for the NULL
+
+null_prior/null_post_o
+null_prior/null_post_a
+
+
+as.data.frame(samples_o$BUGSoutput$summary) %>% 
+  select(mean, sd, Rhat) %>% 
+  kable("latex", digits = 3, booktabs = T,
+        caption = "Bayesian T-test: control vs opiates") %>% 
+  kable_styling(latex_options = "hold_position")
+
+as.data.frame(samples_a$BUGSoutput$summary) %>% 
+  select(mean, sd, Rhat) %>% 
+  kable("latex", digits = 3, booktabs = T,
+        caption = "Bayesian T-test: control vs  amphetamines") %>% 
+  kable_styling(latex_options = "hold_position")
+```
+
+
+```{r}
+params_to_save = c(
+  "alpha_a_rew",
+  "alpha_a_pun",
+  "alpha_decay",
+  "alpha_w_f",
+  "alpha_w_p",
+  "mu_a_rew",
+  "mu_a_pun",
+  "mu_decay",
+  "mu_w_f",
+  "mu_w_p"
+)
+n_trials_c <- apply(t(payoff_c), 1, function(x) length(na.omit(x)))
+n_trials_o <- apply(t(payoff_o), 1, function(x) length(na.omit(x)))
+n_trials_a <- apply(t(payoff_a), 1, function(x) length(na.omit(x)))
+
+samples_o <- jags.parallel(data = list(n_trials_c = n_trials_c,
+                                     n_trials_o = n_trials_o,
+                                     rew_c = t(payoff_c)/100,
+                                     rew_o = t(payoff_o)/100,
+                                     n_sub_c = nrow(t(payoff_c)),
+                                     n_sub_o = nrow(t(payoff_o)),
+                                     choice = t(choices_c),
+                                     choice_o = t(choices_o),
+                                     n_decks = 4
+                                     ),
+              inits = NULL, 
+              parameters.to.save = params_to_save, 
+              model.file = "hier_group_orl_jags.txt",
+              n.chains = 4, n.iter = 3000, n.burnin = 1000, n.thin = 1 # warm-up
+              )
+
+saveRDS(samples_o, "hier_group_orl_opi.rds")
+
+```
+
+```{r}
+params_to_save = c(
+  "alpha_a_rew",
+  "alpha_a_pun",
+  "alpha_decay",
+  "alpha_w_f",
+  "alpha_w_p",
+  "mu_a_rew",
+  "mu_a_pun",
+  "mu_decay",
+  "mu_w_f",
+  "mu_w_p"
+)
+n_trials_c <- apply(t(payoff_c), 1, function(x) length(na.omit(x)))
+n_trials_o <- apply(t(payoff_o), 1, function(x) length(na.omit(x)))
+n_trials_a <- apply(t(payoff_a), 1, function(x) length(na.omit(x)))
+
+samples_o <- jags.parallel(data = list(n_trials_c = n_trials_c,
+                                     n_trials_o = n_trials_a,
+                                     rew_c = t(payoff_c)/100,
+                                     rew_o = t(payoff_a)/100,
+                                     n_sub_c = nrow(t(payoff_c)),
+                                     n_sub_o = nrow(t(payoff_a)),
+                                     choice = t(choices_c),
+                                     choice_o = t(choices_a),
+                                     n_decks = 4
+                                     ),
+              inits = NULL, 
+              parameters.to.save = params_to_save, 
+              model.file = "hier_group_orl_jags.txt",
+              n.chains = 4, n.iter = 3000, n.burnin = 1000, n.thin = 1 # warm-up
+              )
+
+saveRDS(samples_o, "hier_group_orl_amp.rds")
+
+```
+
+```{r}
+fit_opi <- readRDS("hier_group_orl_opi.rds")
+fit_amp <- readRDS("hier_group_orl_amp.rds")
+
+fit_opi
+fit_amp
+
+
+get_dens_plots <- function(fit,
+           var_name = c("alpha_a_pun",
+                        "alpha_a_rew",
+                        "alpha_decay",
+                        "alpha_w_f",
+                        "alpha_w_p")) {
+    res = NULL
+    for (var in var_name) {
+      samp = fit$BUGSoutput$sims.list[[var]]
+      res[[var]] =  qc$plot_dens(samp, caption = F)
+      
+      f_post_o <- logspline(samp)
+      null_post_o <- dlogspline(0, f_post_o)
+      
+      null_prior <- dnorm(0, 0, (1/sqrt(.1)))
+      BF = null_post_o/null_prior
+      
+      x = seq(min(samp), max(samp), length.out = 10000)
+      dens = density(samp)
+      max(dens$y)
+      plac_x = min(samp) + (max(samp)-min(samp))/9
+      plac_y1 = max(dens$y) -  max(dens$y)/10
+      plac_y2 = max(dens$y) -  (max(dens$y)/10)*2
+      
+      res[[var]] <- res[[var]] + 
+        geom_line(aes(x=x, y=dnorm(x, 0, (1/sqrt(.1))))) + 
+        annotate("label", x=plac_x, y=plac_y1, label=paste("BF[0]",":", signif(BF, 3), sep=" "), parse=T)+
+        annotate("label", x=plac_x, y=plac_y2, label=paste("BF[H]",":", signif(1/BF, 3), sep=" "), parse=T) +
+        theme(text = element_text(size=15))
+    }
+  return(res)
+}
+
+p_opi = get_dens_plots(fit_opi)
+p_amp = get_dens_plots(fit_amp)
+
+
+
+for (i in 1:length(p_opi)){
+  cat("writing opi:", names(p_opi[i]), "\n")
+  ggsave(plot = p_opi[[i]], filename = paste("plots/", names(p_opi[i]), "_opi", ".png", sep = ""))
+  cat("writing amp:", names(p_amp[i]), "\n")
+  ggsave(plot = p_amp[[i]], filename = paste("plots/", names(p_amp[i]), "_amp", ".png", sep = ""))
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

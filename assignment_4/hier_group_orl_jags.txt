@@ -1,0 +1,158 @@
+model {
+### priors
+# difference in mean 
+alpha_a_rew ~ dnorm(0, 1)T(-1, 1)
+alpha_a_pun ~ dnorm(0, 1)T(-1, 1)
+alpha_decay ~ dnorm(0, 1)
+alpha_w_f ~   dnorm(0, 1)
+alpha_w_p ~   dnorm(0, 1)
+
+# mean
+mu_a_rew ~ dt(0, 1, 1)T(0,1)
+mu_a_pun ~ dt(0, 1, 1)T(0,1)
+mu_decay ~ dt(0, 1, 1)T(0,)
+mu_w_f ~   dnorm(0, 1)
+mu_w_p ~   dnorm(0, 1)
+
+# precision pr. group
+sigma_a_rew_c ~ dgamma(0.005, 0.01)T(0.001,)
+sigma_a_pun_c ~ dgamma(0.005, 0.01)T(0.001,)
+sigma_decay_c ~ dgamma(0.01,  0.01)T(0.001,)
+sigma_w_f_c ~   dgamma(0.01,  0.01)T(0.001,)
+sigma_w_p_c ~   dgamma(0.01,  0.01)T(0.001,)
+
+sigma_a_rew_o ~ dgamma(0.005, 0.01)T(0.001,)
+sigma_a_pun_o ~ dgamma(0.005, 0.01)T(0.001,)
+sigma_decay_o ~ dgamma(0.01,  0.01)T(0.001,)
+sigma_w_f_o ~   dgamma(0.01,  0.01)T(0.001,)
+sigma_w_p_o ~   dgamma(0.01,  0.01)T(0.001,)
+
+# --- control model --- #
+  c <- n_decks - 1
+  for (s in 1:n_sub_c){
+    a_rew[s] ~ dnorm(mu_a_rew + (alpha_a_rew/2), sigma_a_rew_c)T(0,1)
+    a_pun[s] ~ dnorm(mu_a_pun + (alpha_a_pun/2), sigma_a_pun_c)T(0,1)
+    decay[s] ~ dnorm(mu_decay + (alpha_decay/2), sigma_decay_c)T(0,)
+    w_f[s] ~ dnorm(mu_w_f + (alpha_w_f/2), sigma_w_f_c)
+    w_p[s] ~ dnorm(mu_w_p + (alpha_w_p/2), sigma_w_p_c)
+  
+      # choice first round
+    for (d in 1:n_decks){
+      ev[s, 1,d] ~ dnorm(0,1)
+      ef[s, 1,d] ~ dnorm(0,1)
+      pers[s, 1,d] ~ dnorm(0,1)
+      
+      p[s, 1, d] <- 0.25
+    }
+    
+    # building the model
+    for (t in 2:n_trials_c[s]) {
+      
+      sign_x[s, t] <- ifelse(rew_c[s, t-1] == 0, 0,
+                         ifelse(rew_c[s, t-1]>0,1,-1)) 
+      
+      for (d in 1:n_decks) {
+        
+        
+        ev_update[s, t,d] <- ifelse(sign_x[s, t] >= 0,
+          ev[s, t-1, d] + (a_rew[s]*(rew_c[s, t-1] - ev[s, t-1,d])),
+          ev[s, t-1, d] + (a_pun[s]*(rew_c[s, t-1] - ev[s, t-1,d])))
+  
+        ev[s, t,d] <- ifelse(choice[s, t-1]==d, ev_update[s, t,d], ev[s, t-1,d]) 
+  
+        ef_chosen[s, t,d] <- ifelse(sign_x[s, t] >= 0,
+          ef[s, t-1, d] + (a_rew[s]*(sign_x[s, t] - ef[s, t-1,d])),
+          ef[s, t-1, d] + (a_pun[s]*(sign_x[s, t] - ef[s, t-1,d])))
+        
+        ef_not_chosen[s, t,d] <- ifelse(sign_x[s, t] >= 0,
+          ef[s, t-1, d] + (a_pun[s]*((-sign_x[s, t]/3) - ef[s, t-1, d])),
+          ef[s, t-1, d] + (a_rew[s]*((-sign_x[s, t]/3) - ef[s, t-1, d])))
+        
+        
+        ef[s, t,d] <- ifelse(choice[s, t-1]==d, ef_chosen[s, t, d], ef_not_chosen[s, t, d]) 
+        
+  
+        pers[s, t,d] <- ifelse(choice[s, t-1]==d,
+                          1/(1+decay[s]),
+                          pers[s, t-1,d]/(1+decay[s]))
+  
+        v[s, t, d] <- ev[s, t, d] + ef[s, t, d] * w_f[s] + pers[s, t, d] * w_p[s]
+        
+  
+        tmp_p[s, t, d] <- exp(v[s, t, d])
+        
+      } # end d loop
+      
+      for (d in 1:n_decks) {
+        p[s, t, d] <- tmp_p[s, t, d]/sum(tmp_p[s, t,])
+      } # end second d loop
+      
+      choice[s, t] ~ dcat(p[s, t,]) # choice on trial t is a sample from a categorical distribution
+      
+    }
+  }
+
+# --- opiod model --- #
+  for (s in 1:n_sub_o){
+    a_rew_o[s] ~ dnorm(mu_a_rew - (alpha_a_rew/2), sigma_a_rew_o)T(0,1)
+    a_pun_o[s] ~ dnorm(mu_a_pun - (alpha_a_pun/2), sigma_a_pun_o)T(0,1)
+    decay_o[s] ~ dnorm(mu_decay - (alpha_decay/2), sigma_decay_o)T(0,)
+    w_f_o[s] ~ dnorm(mu_w_f - (alpha_w_f/2), sigma_w_f_o)
+    w_p_o[s] ~ dnorm(mu_w_p - (alpha_w_p/2), sigma_w_p_o)
+  
+      # choice first round
+    for (d in 1:n_decks){
+      ev_o[s, 1,d] ~ dnorm(0,1)
+      ef_o[s, 1,d] ~ dnorm(0,1)
+      pers_o[s, 1,d] ~ dnorm(0,1)
+      
+      p_o[s, 1, d] <- 0.25
+    }
+    
+    # building the model
+    for (t in 2:n_trials_o[s]) {
+      
+      sign_x_o[s, t] <- ifelse(rew_o[s, t-1] == 0, 0,
+                         ifelse(rew_o[s, t-1]>0,1,-1)) 
+      
+      for (d in 1:n_decks) {
+        
+        ev_update_o[s, t,d] <- ifelse(sign_x_o[s, t] >= 0,
+          ev_o[s, t-1, d] + (a_rew_o[s]*(rew_o[s, t-1] - ev_o[s, t-1,d])),
+          ev_o[s, t-1, d] + (a_pun_o[s]*(rew_o[s, t-1] - ev_o[s, t-1,d])))
+  
+        ev_o[s, t,d] <- ifelse(choice_o[s, t-1]==d, ev_update_o[s, t,d], ev_o[s, t-1,d]) 
+  
+        ef_chosen_o[s, t,d] <- ifelse(sign_x_o[s, t] >= 0,
+          ef_o[s, t-1, d] + (a_rew_o[s]*(sign_x_o[s, t] - ef_o[s, t-1,d])),
+          ef_o[s, t-1, d] + (a_pun_o[s]*(sign_x_o[s, t] - ef_o[s, t-1,d])))
+        
+        ef_not_chosen_o[s, t,d] <- ifelse(sign_x_o[s, t] >= 0,
+          ef_o[s, t-1, d] + (a_pun_o[s]*((-sign_x_o[s, t]/3) - ef_o[s, t-1, d])),
+          ef_o[s, t-1, d] + (a_rew_o[s]*((-sign_x_o[s, t]/3) - ef_o[s, t-1, d])))
+        
+        
+        ef_o[s, t,d] <- ifelse(choice_o[s, t-1]==d, ef_chosen_o[s, t, d], ef_not_chosen_o[s, t, d]) 
+        
+  
+        pers_o[s, t,d] <- ifelse(choice_o[s, t-1]==d,
+                          1/(1+decay_o[s]),
+                          pers_o[s, t-1,d]/(1+decay_o[s]))
+  
+        v_o[s, t, d] <- ev_o[s, t, d] + ef_o[s, t, d] * w_f_o[s] + pers_o[s, t, d] * w_p_o[s]
+        
+  
+        tmp_p_o[s, t, d] <- exp(v_o[s, t, d])
+        
+      } # end d loop
+      
+      for (d in 1:n_decks) {
+        p_o[s, t, d] <- tmp_p_o[s, t, d]/sum(tmp_p_o[s, t,])
+      } # end second d loop
+      
+      choice_o[s, t] ~ dcat(p_o[s, t,]) # choice on trial t is a sample from a categorical distribution
+      
+    }
+  }
+}
+

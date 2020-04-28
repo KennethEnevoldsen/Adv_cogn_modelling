@@ -12,6 +12,7 @@ model {
   sigma_w_f ~   dgamma(0.01,  0.01)T(0.001,)
   sigma_w_p ~   dgamma(0.01,  0.01)T(0.001,)
   
+  c <- n_decks - 1
   for (s in 1:subject){
     a_rew[s] ~ dnorm(mu_a_rew, sigma_a_rew)T(0,1)
     a_pun[s] ~ dnorm(mu_a_pun, sigma_a_pun)T(0,1)
@@ -19,7 +20,6 @@ model {
     w_f[s] ~ dnorm(mu_w_f, sigma_w_f)
     w_p[s] ~ dnorm(mu_w_p, sigma_w_p)
   
-    c <- n_decks - 1
       # choice first round
     for (d in 1:n_decks){
       ev[s, 1,d] ~ dnorm(0,1)

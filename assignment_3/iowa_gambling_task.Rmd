@@ -174,10 +174,16 @@ model <- "model {
 writeLines(model, "pvl_delta_jags.txt")
 ```
 
-
+$$
+variance = \sigma^2\\
+standard \quad deviation = \sigma\\
+precision = \tau
+$$
 
 $$
-1/\sigma^2 = (\sigma^2)^{-1} = \sigma^{-2} = \tau
+1/\sigma^2 = (\sigma^2)^{-1} = \sigma^{-2} = \tau \\
+\Rightarrow  1 = \tau \cdot \sigma^2 \\
+\Rightarrow  \frac{1}{\tau} = \sigma^2
 $$
 where $\tau$ is precision and $\sigma$ is standard deviation
 
