@@ -3,9 +3,43 @@ title: "assignment5"
 author: "K. Enevoldsen & L. Hansen"
 date: "4/28/2020"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r}
+pacman::p_load(pacman, tidyverse, R2jags, modules)
 
+qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
+modules::reload(qc)
+
+source("CC.R")
+source("EWA.R")
+```
+
+```{r}
+n_agents <- 3
+n_trials <- 100
+n_tokens <- 20
+pi <- 1.2
+
+dat <- EWA(n_agents, n_trials, n_tokens, pi, 
+           delta=runif(n_agents, 0.2, 0.4),
+           rho=runif(n_agents, 0.5, 0.9),
+           phi=runif(n_agents, 0.4, 0.8),
+           lambda=runif(n_agents, 0.8, 2))
+dat$choice
+dat$internal_states$phi
+
+parameters = list(
+  gb_1 = runif(n_agents, 0, 20),
+  omega_1 = runif(n_agents, 0, 1),
+  lambda = runif(n_agents, 0, 1),
+  gamma = runif(n_agents, 0, 1),
+  p_0 = runif(n_agents, 0, 20),
+  p_beta = runif(n_agents, 0, 1)
+)
+dat <- CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters)
+dat$c
 ```
 

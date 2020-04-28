@@ -1,5 +1,24 @@
+#'@title Experience weighted attraction model
+#'@description
+#'
+#'@param gb_1 initial belief about what other will contribute
+#'@param omega_1 init weighting of beliefs about others contributions
+#'@param lambda  decay rate in weighting of beliefs
+#'@param gamma  weighting of beliefs about what others will contribute
+#'@param p_0 intercept of linear model relating prefered contrib. to possible contrib. vals
+#'@param p_beta slope of linear model relating prefered contrib. to possible contrib. vals
+#'
+#'@author
+#'K. Enevoldsen
+#'
+#'@return 
+#' The actions of the agent
+#'
+#'@references
+#'
+#'@export
 
-CC_model <- function(n_agents, n_trials, vals, parameters) {
+CC <- function(n_agents, n_trials, vals, parameters) {
   
   # Free parameters
   gb_1 <- parameters$gb_1 
@@ -50,8 +69,5 @@ CC_model <- function(n_agents, n_trials, vals, parameters) {
   
   results <- list(c = c,
                   omega = omega)
-  
+  return(results)
 }
-
-
-res <- CC_model(n_agents, n_trials, vals, parameters)
