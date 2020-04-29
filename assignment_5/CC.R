@@ -19,7 +19,6 @@
 #'@export
 
 CC <- function(n_agents, n_trials, vals, parameters) {
-  
   # Free parameters
   gb_1 <- parameters$gb_1 
   omega_1 <- parameters$omega_1 # init weighting of beliefs about others contributions
@@ -36,11 +35,12 @@ CC <- function(n_agents, n_trials, vals, parameters) {
   c <- array(0, c(n_agents, n_trials)) # actual contributions
   
   # Agents' prefererences - assumed to be a linear function of possible values
-  p_vals <- array(0, c(n_agents, length(vals)))
-  for (n in 1:n_agents) {
-    p_vals[n, ] <- p_0[n] + (p_beta[n] * vals) # vec of preferred contrib for each possible value
-  }
+  p_vals <- p_0 + (matrix(p_beta) %*% vals)
   
+  p_beta <- if_else(round(p_vals[, ncol(p_vals)], 0) > max(vals), (20-p_0)/20, p_beta) 
+  # recalculate p_vals
+  p_vals <- p_0 + (matrix(p_beta) %*% vals)
+  parameters$p_beta <- p_beta
   # set omega as starting weighting
   omega[,1] <- omega_1
   # set starting beliefs about what others will contribute
@@ -50,8 +50,9 @@ CC <- function(n_agents, n_trials, vals, parameters) {
   ga[1] <- mean(gb_1)
   
   for (t in 2:n_trials) {
-    
+    # cat("\ntrial:", t)
     for (n in 1:n_agents) {
+      # cat("\n\tagent:", n)
       # update belief about what others contribute as a weighted average of prior beliefs and observed contributions
       gb[n, t] <- (gamma[n] * (gb[n, t-1])) + ((1 - gamma[n]) * (ga[t-1]))
       # determine what people predict/prefer to contribute, given the group contriution
@@ -68,6 +69,11 @@ CC <- function(n_agents, n_trials, vals, parameters) {
   }
   
   results <- list(c = c,
-                  omega = omega)
+                  omega = omega,
+                  parameters = parameters,
+                  ga = ga, 
+                  vals = vals)
   return(results)
 }
+
+

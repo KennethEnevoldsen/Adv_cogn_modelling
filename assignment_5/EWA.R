@@ -25,7 +25,7 @@ EWA <- function(n_agents=100, n_trials=20, n_tokens=20, pi, delta, rho, phi, lam
 
   n[, 1] <- 1
   c[,1] <- 20
-  A[,1,] <- 1
+  A[,1,] <- 0
   
   for (t in 2:n_trials){
     for (a in 1:n_agents){
@@ -42,6 +42,7 @@ EWA <- function(n_agents=100, n_trials=20, n_tokens=20, pi, delta, rho, phi, lam
       c[a, t] <- extraDistr::rcat(1, p[a, t, ])
     }
   }
+
   internal_states=list(delta=delta, rho=rho, phi=phi, lambda=lambda)
   res <- list(choice=c, n=n, prob=p, pi=pi, internal_states=internal_states)
   return(res)

@@ -19,27 +19,77 @@ source("EWA.R")
 
 ```{r}
 n_agents <- 3
-n_trials <- 100
+n_trials <- 15
 n_tokens <- 20
 pi <- 1.2
 
-dat <- EWA(n_agents, n_trials, n_tokens, pi, 
+dat_ewa <- EWA(n_agents, n_trials, n_tokens, pi, 
            delta=runif(n_agents, 0.2, 0.4),
            rho=runif(n_agents, 0.5, 0.9),
            phi=runif(n_agents, 0.4, 0.8),
            lambda=runif(n_agents, 0.8, 2))
-dat$choice
-dat$internal_states$phi
+dat_ewa$choice
+dat_ewa$internal_states$phi
 
 parameters = list(
-  gb_1 = runif(n_agents, 0, 20),
+  gb_1 = round(runif(n_agents, 1, 20), 0),
   omega_1 = runif(n_agents, 0, 1),
-  lambda = runif(n_agents, 0, 1),
+  lambda = runif(n_agents, 0, 0.5),
   gamma = runif(n_agents, 0, 1),
-  p_0 = runif(n_agents, 0, 20),
+  p_0 = runif(n_agents, 0, 8),
   p_beta = runif(n_agents, 0, 1)
 )
-dat <- CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters)
-dat$c
+dat_cc <- CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters)
+dat_cc$c
+dat_cc$parameters$p_0
+dat_cc$parameters$p_beta
 ```
+
+```{r jags}
+
+# EWA
+fit_ewa <- jags.parallel(data = list(n_agents=n_agents, 
+                                 n_trials=n_trials, 
+                                 n_tokens=n_tokens,
+                                 c=dat_ewa$choice,
+                                 c_actual=dat_ewa$choice,
+                                 pi=pi),
+                     inits = NULL,
+                     parameters.to.save = c("delta", "rho", "phi", "lambda"),
+                     n.chains = 4, n.iter = 3000, n.burnin = 1000,
+                     model.file = "EWL_jags.txt"
+                     )
+fit_ewa
+
+
+
+## CC
+fit <- jags.parallel(data = list(n_agents=n_agents, 
+                                 n_trials=n_trials, 
+                                 ga=dat_cc$ga,
+                                 c=dat_cc$c,
+                                 vals=dat_cc$vals),
+                     inits = NULL,
+                     parameters.to.save = c("omega_1", "lambda", "gamma", "p_0", "p_beta", "omega", "c"),
+                     n.chains = 4, n.iter = 3000, n.burnin = 1000,
+                     model.file = "CC_jags.txt"
+                     )
+fit
+```
+
+
+
+$$
+
+20 = \alpha +  \beta \cdot 20 \\
+solve \quad for \quad \beta \\
+\Rightarrow 20-\alpha = \beta \cdot 20 \\
+\Rightarrow \frac{20-\alpha}{20} = \beta
+
+$$
+
+
+
+
+
 
