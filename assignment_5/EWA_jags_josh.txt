@@ -1,0 +1,47 @@
+model {
+
+ for (a in n_agents){
+    delta[a] ~ dunif(0, 1)
+    rho[a] ~   dunif(0, 1)
+    phi[a] ~   dunif(0, 1)
+    lambda[a] ~dunif(0, 1)
+    
+    # trial 1
+    n[a, 1] <- 1
+    c[a, 1] ~ dunif(0, n_tokens)
+    
+    for (tok in n_tokens){
+      A[a, 1, tok] <- 0
+    }
+ }
+ 
+ for (t in 2:n_trials){
+  
+  for (a in 1:n_agents){
+  
+    n[a, t] <- (rho[a] * n[a, t-1]) + 1
+    
+    for (j in 1:n_tokens){
+    
+      A[a, t, j] <- (
+      
+        (phi[a] * n[a, t-1] * A[a, t-1, j]) +
+        (delta[a] + ((1 - delta[a]) * (c_choice_index[n, t-1] == j))) *
+        ((((j + group_c[n, t-1]) * pi) / n_agents) -j)
+        
+        ) /
+        n[a,t]
+      
+      exp_A[a, t, j] <- exp(lambda[a] * A[a, t, j])
+      
+      
+    }
+    
+    for (j in 1:n_tokens) {
+      P[a, t, j] <- exp_A[a, t, j] / sum(exp_A[a, t,])
+    }
+  
+    c[a, t] ~ dcat(P[a, t,])
+  }
+ }
+}
