@@ -89,6 +89,43 @@ solve \quad for \quad \beta \\
 $$
 
 
+```{r}
+
+gen_fun = list(cc = "CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters = list(
+                                                                  gb_1 = round(runif(n_agents, 1, 20), 0),
+                                                                  omega_1 = runif(n_agents, 0, 1),
+                                                                  lambda = runif(n_agents, 0, 0.5),
+                                                                  gamma = runif(n_agents, 0, 1),
+                                                                  p_0 = runif(n_agents, 0, 8),
+                                                                  p_beta = runif(n_agents, 0, 1)
+                                                                  ))",
+               ewa = "EWA(n_agents, n_trials, n_tokens, pi, 
+                           delta=runif(n_agents, 0.2, 0.4),
+                           rho=runif(n_agents, 0.5, 0.9),
+                           phi=runif(n_agents, 0.4, 0.8),
+                           lambda=runif(n_agents, 0.8, 2))") 
+params_to_save = list(cc = c("omega_1", "lambda", "gamma", "p_0", "p_beta", "omega", "c"),
+                      ewa = c("delta", "rho", "phi", "lambda"))
+model_filepath = list(cc = "CC_jags.txt",
+                      ewa = "EWL_jags.txt")
+
+data_to_fit = list(cc = "list(n_agents=n_agents,
+                                 n_trials=n_trials, 
+                                 ga=sim_dat$ga,
+                                 c=sim_dat$c,
+                                 vals=sim_dat$vals)",
+                   ewa = "list(n_agents=n_agents, 
+                                 n_trials=n_trials, 
+                                 ga=sim_dat$ga,
+                                 c=sim_dat$c,
+                                 vals=sim_dat$vals)")
+
+res <- jh$simulate_fit(gen_fun, data_to_fit, model_filepath, params_to_save, save_samples = T, n_sim = 100)
+saveRDS(res, "n_sim_100.rds")
+
+```
+
+
 
 
 
