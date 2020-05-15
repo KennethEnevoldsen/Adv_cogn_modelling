@@ -1,0 +1,322 @@
+---
+title: "P1"
+author: "LH"
+date: "2/21/2020"
+output: html_document
+---
+
+```{r}
+pacman::p_load(rjags, tidyverse, R2jags, patchwork, knitr, cvms)
+
+set.seed(3)
+```
+
+## Model 1: fixed theta model
+```{r}
+# Function for generating data from the fixed model
+gen_fixed <- function(theta, n_trials){
+  g_fixed <- array(0, c(n_trials))
+  
+  for (t in 1:n_trials) {
+    g_fixed[t] <- rbinom(1,1, theta)
+  }
+  return(g_fixed)
+}
+```
+
+## Model 2: learning model
+```{r}
+# Function for generating data from the learning model
+
+gen_learning <- function(theta1, alpha, n_trials){
+  g_learn <- array(0, c(n_trials))
+  theta <- array(0, c(n_trials))
+
+  # Defining the first trial
+  theta[1] <- theta1
+  g_learn[1] <- rbinom(1,1,theta[1])
+  
+  for (t in 2:n_trials){
+    # using a stupid learning model that just asymptotes to 1 - does not use prediction error or anything
+    theta[t] <- theta[t-1]^(1/(1+alpha))
+    g_learn[t] <- rbinom(1, 1, theta[t])
+  }
+  return(list(g_learn = g_learn, theta = theta))
+}
+```
+
+# Fixed jags model
+```{r}
+model <- "model {
+  # define prior
+  theta ~ dbeta(1,1)
+  
+  for (t in 1:n_trials) {
+    g[t] ~ dbin(theta,1)
+  }
+}"
+
+writeLines(model, "chick_fixed.txt")
+```
+
+## Learning jags model
+```{r}
+model <- "model {
+  # define priors
+  # T truncates the distribution to the bounds
+  # in dnorm, 0,01 is not standard deviation but precision. 
+  #So low number is more uncertain
+  alpha ~ dnorm(0,0.01)T(0,1)
+  theta1 ~ dnorm(0.5,0.01)T(0,1)
+  
+  theta[1] <- theta1
+  
+  for (t in 2:n_trials) {
+  
+    theta[t] <- theta[t-1]^(1/(1+alpha))
+    g[t] ~ dbin(theta[t],1)
+  }
+}
+  "
+
+writeLines(model, "chick_learning.txt")
+```
+
+## Parameter recovery 
+```{r}
+
+param_recovery <- function(guess, n_trials, params = c('theta'), model_file = 'chick_fixed.txt') {
+  g <- guess
+  n_trials <- n_trials
+  
+  data <- list('g', 'n_trials')
+  
+  samples <- jags.parallel(data, inits=NULL, params, 
+                  model.file = model_file,
+                  n.chains = 4, n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  return(samples)
+}
+
+# param_recovery(g_fix, 100)
+# param_recovery(g_learn$g_learn, 100, c('theta', 'theta1', 'alpha'), 'chick_learning.txt')
+```
+
+## MAP function
+```{r}
+MAP <- function(val){
+  # Function for calculating the Maximum a Posteriori value from a list of samples
+  return(density(val)$x[density(val)$y == max(density(val)$y)])
+}
+
+```
+
+## Parameter recovery for fixed model
+```{r}
+# Keeping track of true variables
+n_sims <- 500
+
+true_theta <- array(0 ,c(n_sims))
+inferred_theta <- array(0, c(n_sims))
+
+n_trials <- 100
+
+for (i in 1:n_sims) {
+  theta <- runif(1,0,1)
+  true_theta[i] <- theta
+  
+  # simulating data using the fixed model
+  dat <- gen_fixed(theta, n_trials)
+  
+  ## Doing inference/parameter recovery using the jags code
+  samples <- param_recovery(dat, n_trials)
+  
+  ## Recording the recovered theta
+  post_theta <- samples$BUGSoutput$sims.list$theta
+  inferred_theta[i] <- MAP(post_theta)
+  
+  print(sprintf("sim %i complete", i))
+}
+
+param_rec <- data.frame(inferred_theta = inferred_theta, true_theta = true_theta)
+
+
+theta_plot <- ggplot(param_rec, aes(inferred_theta, true_theta)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+  theme_bw() +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0,1)) +
+  labs(title = 'Parameter recovery of theta from fixed model', x = 'Inferred theta', y = 'True theta')
+
+theta_plot
+```
+
+
+## Parameter recovery across a wide range of parameters for the learning model
+```{r}
+# Keeping track of true variables
+n_sims <- 500
+
+true_alpha <- array(0 ,c(n_sims))
+inferred_alpha <- array(0, c(n_sims))
+
+true_theta1 <- array(0 ,c(n_sims))
+inferred_theta1 <- array(0, c(n_sims))
+
+n_trials <- 100
+
+for (i in 1:n_sims) {
+  # learning rate - setting it to random sample each time
+  alpha <- runif(1,0,1)
+  # Need to set a starting theta, ie. the knowledge of the agent at t = 1
+  theta1 <- runif(1,0,1)
+  
+  # Saving the alpha and theta used for simulation
+  true_alpha[i] <- alpha
+  true_theta1[i] <- theta1
+  
+  # simulating data using the learning model
+  dat <- gen_learning(theta1, alpha, n_trials)
+  
+  ## Doing inference/parameter recovery using the jags code
+  samples <- param_recovery(dat$g_learn, n_trials, c('theta', 'theta1', 'alpha'), 'chick_learning.txt')
+  
+  ## Recording the recovered values for alpha and theta1
+  post_alpha <- samples$BUGSoutput$sims.list$alpha
+  inferred_alpha[i] <- MAP(post_alpha)
+  
+  post_theta1 <- samples$BUGSoutput$sims.list$theta1
+  inferred_theta1[i] <- MAP(post_theta1)
+  
+  print(sprintf("sim %i complete", i))
+}
+
+param_rec <- data.frame(inferred_alpha = inferred_alpha, true_alpha = true_alpha,
+                        inferred_theta1 = inferred_theta1, true_theta1 = true_theta1)
+
+
+alpha_plot <- ggplot(param_rec, aes(inferred_alpha, true_alpha)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+  theme_bw() +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0,1)) +
+  labs(title = 'Parameter recovery of alpha from learning model', x = 'Inferred alpha', y = 'True alpha')
+
+theta1_plot <- ggplot(param_rec, aes(inferred_theta1, true_theta1)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+  theme_bw() +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0,1)) +
+  labs(title = 'Parameter recovery of theta1 from learning model', x = 'Inferred theta1', y = 'True theta1')
+
+```
+
+## Model recovery
+```{r}
+# Comparing models against it eachother - which model describes the generated data the best? 
+# Does the data generated by the fixed model fit the data generated by it, fit better than using the learning models?
+
+# Run each model (forward simulation) (using different parameter values)
+# Run inference using jags
+# Record DIC
+# Cross them over, ie. fit the fixed model data to the learning model and vice versa
+
+# Set up loop
+n_sims <- 100
+n_trials <- 100
+
+
+dic_fdat <- array(0, c(n_sims, 2))
+dic_ldat <- array(0, c(n_sims, 2))
+
+
+for (i in 1:n_sims){
+  # Setting initial parameters 
+  theta <- runif(1,0,1)
+  alpha <- runif(1,0,1)
+  theta1 <- runif(1,0,1)
+  # Generating data
+  d_fixed <- gen_fixed(theta, n_trials)
+  d_learn <- gen_learning(theta1, alpha, n_trials)
+
+  ######### Parameter recovery
+  
+  # Fixed data, fixed model
+  fdata_fmodel <- param_recovery(d_fixed, n_trials)
+  # Learning data, fixed model
+  ldata_fmodel <- param_recovery(d_learn$g_learn, n_trials)
+  
+  # Fixed data, learning model
+  fdata_lmodel <- param_recovery(d_fixed, n_trials, c('theta', 'theta1', 'alpha'), 'chick_learning.txt')
+  # Learning data, learning model
+  ldata_lmodel <- param_recovery(d_learn$g_learn, n_trials, c('theta', 'theta1', 'alpha'), 'chick_learning.txt')
+
+  ########## Saving DIC
+  dic_fdat[i, 1] <- fdata_fmodel$BUGSoutput$DIC
+  dic_fdat[i, 2] <- fdata_lmodel$BUGSoutput$DIC
+  
+  dic_ldat[i, 1] <- ldata_fmodel$BUGSoutput$DIC
+  dic_ldat[i, 2] <- ldata_lmodel$BUGSoutput$DIC
+  
+
+  print(sprintf("sim %i complete", i))
+}
+
+```
+
+```{r}
+### Create confusion matrix
+min_dic_fdat <- apply(data.frame(dic_fdat), 1, which.min)
+min_dic_ldat <- apply(data.frame(dic_ldat), 1, which.min)
+
+dic_df <- data.frame(predictions = c(min_dic_fdat, min_dic_ldat), true = c(rep('Fixed', n_sims), rep('Learning', n_sims))) %>% 
+  mutate(predictions = as.character(predictions)) %>%
+  mutate(predictions = recode(predictions, '1' = 'Fixed', '2' = 'Learning'))# %>% 
+
+write.csv(dic_df, "p1_model_rec.csv")
+
+winstall.packages("cvms")
+devtools::install_github("ludvigolsen/cvms", ref="hparams_tuning")
+library(cvms)
+
+conf_mat <-  confusion_matrix(dic_df$true, dic_df$predictions)
+cf_mat <- conf_mat$`Confusion Matrix`[[1]]
+
+plot_confusion_matrix(cf_mat, add_row_percentages = F, add_col_percentages = T, add_normalized = T, counts_on_top = T) +
+  labs(x = "Data", y = "Model")
+
+```
+
+
+
+```{r}
+######## CREATE CONFUSION MATRIX OF PROPORTION THE CORRECT MODEL WAS CHOSEN
+dic_fixed_model <- data.frame(f_data = dic_fdata_fmodel, ldata = dic_ldata_fmodel)
+dic_learning_model <- data.frame(f_data = dic_fdata_lmodel, ldata = dic_ldata_lmodel)
+
+min_dic_fmodel <- apply(dic_fixed_model, 1, which.min)
+min_dic_lmodel <- apply(dic_learning_model, 1, which.min)
+
+dic_df <- data.frame(predictions = c(min_dic_fmodel, min_dic_lmodel), true = c(rep('Fixed', n_sims), rep('Learning', n_sims))) %>% 
+  mutate(predictions = as.character(predictions)) %>%
+  mutate(predictions = recode(predictions, '1' = 'Fixed', '2' = 'Learning'))# %>% 
+  
+# 
+# fmodel_df <- as.data.frame(table(min_dic_fmodel), row.names = c('fixed model', 'learning model')) %>% 
+#   select(Freq) %>% 
+#   rename(fixed_data = Freq) %>% 
+#   rownames_to_column() %>% 
+#   mutate(learning_data = as.data.frame(table(min_dic_lmodel))$Freq) %>% 
+#   kable()
+
+```
+
+```{r}
+#devtools::install_github("ludvigolsen/cvms", ref="hparams_tuning")
+library(cvms)
+
+conf_mat <-  confusion_matrix(dic_df$true, dic_df$predictions)
+cf_mat <- conf_mat$`Confusion Matrix`[[1]]
+
+plot_confusion_matrix(cf_mat, add_row_percentages = F, add_col_percentages = T, add_normalized = T, counts_on_top = F)
+```

@@ -1,0 +1,615 @@
+---
+title: "m2"
+author: "LH"
+date: "2/26/2020"
+output: html_document
+---
+
+```{r}
+pacman::p_load(R2jags, tidyverse, rjags, extraDistr)
+
+setwd("~/Desktop/CogModel/exercises")
+
+set.seed(60)
+```
+
+## MAP
+```{r}
+MAP <- function(val){
+  # Function for calculating the Maximum a Posteriori value from a list of samples
+  return(density(val)$x[density(val)$y == max(density(val)$y)])
+}
+```
+
+
+## Setting up payoff matrix
+
+```{r}
+# Generate a payoff matrix for the bandit
+
+# This is what our agents are going to learn from
+
+# Choice of bandit A = 30% chance of payoff 2, otherwise 0
+# Choice of bandit B = 70% chance of payoff 1, otherwise 0
+
+n_trials <- 100
+
+a_prob <- 0.3
+a_rew <- 2
+
+b_prob <- 0.7
+b_rew <- 1
+
+# getting the payoff matrix for pulling A/b n_trials times
+payoff <- cbind(rbinom(n_trials, 1, a_prob) * a_rew, rbinom(n_trials, 1, b_prob) * b_rew)
+
+colSums(payoff)
+
+```
+
+## Building random choice agent
+```{r}
+########## BUILDING THE RANDOM CHOICE MODEL #########################
+
+# Building an agent
+random_agent <- function(payoff, n_trials, b) {
+  # responses
+  x <- array(0, c(n_trials))
+  # rewards (the random agent doesn't care about rewards, but still..)
+  r <- array(0, c(n_trials))
+  
+  # Simulating the agent
+  for (t in 1:n_trials) {
+    # agent that chooses randomly between options 1 and 2
+    # with bias (to 1) = theta
+    
+    # Sampling from a categorical distribution with a bias b
+    x[t] <- rcat(1, b)
+    
+    # what reward does the agent get
+    r[t] <- payoff[t, x[t]]
+  }
+  return(list(choice = x, reward = r))
+}
+```
+
+
+
+## Creating random model in JAGS
+```{r}
+model <- "model {
+  # bias for each side
+  # THEY DONT ADD TO ONE! need to specify that
+  #b[1] ~ dunif(0,1)
+  #b[2] ~ dunif(0,1)
+  
+  # this fixes it
+  # any mathematical structure in the world you can capture
+  # do it
+  theta ~ dunif(0,1)
+  b[1] <- theta
+  b[2] <- 1 - theta
+  
+  for (t in 1:n_trials) {
+  # agent that choose randomly with a bias
+  x[t] ~ dcat(b)
+  }
+}
+  "
+
+writeLines(model, "random_agent.txt")
+```
+
+
+## Running the random model 
+```{r}
+# bias towards choosing option 1
+theta <- .7
+b <- c(theta,  1-theta)
+
+random_sims <- random_agent(payoff, n_trials, b)
+
+x <- random_sims$choice
+
+data <- list("x", "n_trials")
+
+params <- c('b')
+
+samples <- jags.parallel(data, inits = NULL, params, 
+                         model.file='random_agent.txt', n.chains = 4,
+                         n.iter = 5000, n.burnin = 1000, n.thin = 1)
+
+
+plot(density(samples$BUGSoutput$sims.list$b[,1]))
+plot(density(samples$BUGSoutput$sims.list$b[,2]))
+```
+
+## Parameter recovery random model
+```{r}
+n_iterations <- 500
+true_theta <- array(0,c(n_iterations))
+infer_b1 <- array(0,c(n_iterations))
+infer_b2 <- array(0,c(n_iterations))
+
+for (i in 1:n_iterations){
+  
+  theta <- runif(1,0,1)
+  b <- c(theta, 1-theta)
+  
+  true_theta[i] <- theta
+  
+  # generate data
+  random_sims <- random_agent(payoff, n_trials, b)
+  x <- random_sims$choice
+  
+  # run JAGS
+  data <- list("x", "n_trials")
+  params <- c('b')
+  samples <- jags.parallel(data, inits = NULL, params, 
+                           model.file='random_agent.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  # Saving the inferred betas
+  b1_samples <- samples$BUGSoutput$sims.list$b[,1]
+  infer_b1[i] <- MAP(b1_samples)
+  b2_samples <- samples$BUGSoutput$sims.list$b[,2]
+  infer_b2[i] <- MAP(b2_samples)
+  
+  print(sprintf("sim %i complete", i))
+}
+
+
+data.frame(inferred_theta = infer_b1, true_theta = true_theta) %>% 
+  ggplot(aes(inferred_theta, true_theta)) +
+    geom_point() +
+    geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+    theme_bw() +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0,1)) +
+    labs(title = 'Parameter recovery of theta (bias) from random bias model', x = 'Inferred theta', y = 'True theta')
+
+theta_plot
+
+plot(infer_b1, true_theta)
+abline(0,1)
+
+```
+
+## Q-learning
+```{r}
+
+RW <- function(payoff, n_trials, alpha, beta){
+  # x = store choices
+  x <- array(0, c(n_trials))
+  # rewards
+  r <- array(0, c(n_trials))
+  # valence (expected value more or less)
+  q <- array(0, c(n_trials, 2))
+  # how they update (only the chosen trial is updated)
+  q_update <- array(0, c(n_trials, 2))
+  # the exponential in the learning rate
+  exp_p <- array(0, c(n_trials, 2))
+  # the probability of chosen each bandit
+  p <- array(0, c(n_trials, 2))
+  
+  # set values for trial 1 
+  q[1,1] <- 1
+  q[1,2] <- 1
+  
+  x[1] <- rcat(1, c(1/2, 1/2))
+  r[1] <- payoff[1, x[1]]
+  
+  for (t in 2:n_trials){
+  
+    for (k in 1:2){
+      # update utility Q for chosen option only, with reward on last trial
+      # unchosen option stays the same
+      # delta rule: previous valence + prediction error
+      q_update[t,k] <- q[t-1,k] + alpha * (r[t-1] - q[t-1,k])
+      # only want to update the chosen one
+      # if the bandit was chosen, set Q to the updated value, else keep it
+      q[t,k] <- ifelse(k == x[t-1], q_update[t,k], q[t-1,k])
+      
+      # Updating the exponential in Luce's choice rule
+      exp_p[t,k] <- exp(beta * q[t,k])
+    }
+    
+    #luce's choice rule to update probability of choosing each bandit
+    # k = bandit
+    for (k in 1:2){
+      # probability of choosing bandit k in trial t will be based on Luce's choice rule
+      p[t,k] <- exp_p[t,k] / sum(exp_p[t,])
+    }
+  
+    # choosing one of the choices (by drawing from the categorical distribution)
+    x[t] <- rcat(1, p[t,])
+    # getting the payoff based on the choice
+    r[t] <- payoff[t,x[t]]
+  }
+  return(list(x = x, r = r, q = q, p = p))
+}
+
+#alpha <- 0.3
+#beta <- 5
+#RW(payoff, 100, alpha, beta)
+
+#rw_out <- RW(payoff, n_trials, alpha, beta)
+#plot(rw_out$p[,2])
+
+par(mfrow=c(3,1))
+plot(rw_out$q[,1])
+plot(rw_out$q[,2])
+plot(rw_out$x)
+```
+
+## Q-learning model in JAGS
+```{r}
+model <- "model {
+
+  alpha ~ dunif(0,1)
+  beta ~ dnorm(0, 0.01)T(0,)
+
+  q[1,1] ~ dnorm(0,0.01)T(0,)
+  q[1,2] ~ dnorm(0,0.01)T(0,)
+  
+  for (t in 2:n_trials){
+  
+    for (k in 1:2){
+      q_update[t,k] <- q[t-1,k] + alpha * (r[t-1] - q[t-1,k])
+      q[t,k] <- ifelse(k == x[t-1], q_update[t,k], q[t-1,k])
+
+      exp_p[t,k] <- exp(beta * q[t,k])
+    }
+    
+    for (k in 1:2){
+      p[t,k] <- exp_p[t,k] / sum(exp_p[t,])
+    }
+  
+    x[t] ~ dcat(p[t,])
+  }
+}
+  "
+
+writeLines(model, "q_learning.txt")
+```
+
+
+## Parameter recovery of Q-learning (test)
+```{r}
+x <- rw_out$x
+r <- rw_out$r
+
+data <- list("x", "r", "n_trials")
+params <- c('alpha', 'beta')
+samples <- jags.parallel(data, inits = NULL, params, 
+                           model.file='q_learning.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+
+samples
+
+par(mfrow=c(2,1))
+plot(density(samples$BUGSoutput$sims.list$beta))
+plot(density(samples$BUGSoutput$sims.list$alpha))
+```
+
+## Full parameter recovery of Q-learning
+```{r}
+n_iterations <- 500
+
+true_alpha <- c(0, c(n_iterations))
+true_beta <- c(0, c(n_iterations))
+
+infer_alpha <-  c(0, c(n_iterations))
+infer_beta <-  c(0, c(n_iterations))
+
+for (i in 1:n_iterations){
+  # true parameters
+  alpha <- runif(1,0,1)
+  beta <- runif(1,0,5)
+  
+  true_alpha[i] <- alpha
+  true_beta[i] <- beta
+  
+  # run function and extract responses
+  rw_sims <- RW(payoff, n_trials, alpha, beta)
+  x <- rw_sims$x
+  r <- rw_sims$r
+  
+  data <- list("x", "r", "n_trials")
+  params <- c('alpha', 'beta')
+  samples <- jags.parallel(data, inits = NULL, params, 
+                           model.file='q_learning.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  infer_alpha[i] <- MAP(samples$BUGSoutput$sims.list$alpha)
+  infer_beta[i] <- MAP(samples$BUGSoutput$sims.list$beta)
+
+  print(sprintf("sim %i complete", i))
+}
+
+
+data.frame(infer_beta = infer_beta, true_beta = true_beta) %>% 
+  ggplot(aes(infer_beta, true_beta)) +
+    geom_point() +
+    geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+    theme_bw() +
+#    coord_cartesian(xlim = c(0, 3), ylim = c(0,3)) +
+    labs(title = 'Parameter recovery of beta from Q-learning model', x = 'Inferred beta', y = 'True beta')
+
+data.frame(infer_alpha = infer_alpha, true_alpha = true_alpha) %>% 
+  ggplot(aes(infer_alpha, true_alpha)) +
+    geom_point() +
+    geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+    theme_bw() +
+#    coord_cartesian(xlim = c(0, 3), ylim = c(0,3)) +
+    labs(title = 'Parameter recovery of alpha from Q-learning model', x = 'Inferred alpha', y = 'True alpha')
+
+
+
+```
+
+## Choice kernel
+
+```{r}
+alpha <- 0.1
+beta <- 1
+
+choice_kernel <- function(payoff, n_trials, alpha, beta){
+  # x = store choices
+  x <- array(0, c(n_trials))
+  # rewards
+  r <- array(0, c(n_trials))
+  # choice kernel
+  ck <- array(0, c(n_trials, 2))
+  # how they update (only the chosen trial is updated)
+  ck_chosen <- array(0, c(n_trials, 2))
+  ck_unchosen <- array(0, c(n_trials, 2))
+
+  # the exponential in the learning rate
+  exp_p <- array(0, c(n_trials, 2))
+  # the probability of chosen each bandit
+  p <- array(0, c(n_trials, 2))
+  
+   # set values for trial 1 
+  ck[1,1] <- 1
+  ck[1,2] <- 1
+  x[1] <- rcat(1, c(1/2, 1/2))
+  r[1] <- payoff[1, x[1]]
+  
+  for (t in 2:n_trials){
+  
+    for (k in 1:2){
+      # Update choice kernel for both. Positive value if its chosen, negative value if its not
+      ck_chosen[t,k] <- ck[t-1,k] + alpha *(1-ck[t-1,k])
+      ck_unchosen[t,k] <- ck[t-1, k] + alpha * (0 - ck[t-1,k])
+      
+      ck[t,k] <- ifelse(k == x[t-1], ck_chosen[t,k], ck_unchosen[t,k])
+      
+      exp_p[t,k] <- exp(beta * ck[t,k])
+    }
+
+    for (k in 1:2){
+      p[t,k] <- exp_p[t,k] / sum(exp_p[t,])
+    }
+    # choosing one of the choices (by drawing from the categorical distribution)
+    x[t] <- rcat(1, p[t,])
+    # getting the payoff based on the choice
+    r[t] <- payoff[t,x[t]]
+  }
+  return(list(x=x, ck = ck, r = r))
+}
+
+choice_k <- choice_kernel(payoff, 100, alpha, beta)
+
+par(mfrow=c(3,1))
+plot(choice_k$x)
+plot(choice_k$ck[,1])
+plot(choice_k$ck[,2])
+
+```
+
+
+```{r}
+model <- "model {
+
+  alpha ~ dunif(0,1)
+  beta ~ dgamma(1,1)
+
+  ck[1,1] ~ dnorm(0,0.01)
+  ck[1,2] ~ dnorm(0,0.01)
+  
+  for (t in 2:n_trials){
+  
+    for (k in 1:2){
+      ck_chosen[t,k] <- ck[t-1,k] + alpha *(1-ck[t-1,k])
+      ck_unchosen[t,k] <- ck[t-1, k] + alpha * (0 - ck[t-1,k])
+      
+      ck[t,k] <- ifelse(k == x[t-1], ck_chosen[t,k], ck_unchosen[t,k])
+      
+      exp_p[t,k] <- exp(beta * ck[t,k])
+    }
+    
+    for (k in 1:2){
+      p[t,k] <- exp_p[t,k] / sum(exp_p[t,])
+    }
+  
+    x[t] ~ dcat(p[t,])
+  }
+}
+  "
+
+writeLines(model, "choice_kernel.txt")
+```
+
+# Test recovery of choice kernel
+```{r}
+x <- choice_k$x
+r <- choice_k$r
+#ck <- choice_k$ck
+
+data <- list("x", "r", "n_trials")
+params <- c('alpha', 'beta')
+samples <- jags.parallel(data, inits = NULL, params, 
+                           model.file='choice_kernel.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+
+samples
+
+par(mfrow=c(2,1))
+plot(density(samples$BUGSoutput$sims.list$beta))
+plot(density(samples$BUGSoutput$sims.list$alpha))
+```
+
+## Parameter recovery choice kernel
+```{r}
+n_iterations <- 500
+
+true_alpha <- c(0, c(n_iterations))
+true_beta <- c(0, c(n_iterations))
+
+infer_alpha <-  c(0, c(n_iterations))
+infer_beta <-  c(0, c(n_iterations))
+
+for (i in 1:n_iterations){
+  # true parameters
+  alpha <- runif(1,0,1)
+  beta <- runif(1,0,5)
+  
+  true_alpha[i] <- alpha
+  true_beta[i] <- beta
+  
+  # run function and extract responses
+  ck_sims <- choice_kernel(payoff, n_trials, alpha, beta)
+  x <- ck_sims$x
+  r <- ck_sims$r
+  
+  data <- list("x", "r", "n_trials")
+  params <- c('alpha', 'beta')
+  samples <- jags.parallel(data, inits = NULL, params, 
+                           model.file='choice_kernel.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  infer_alpha[i] <- MAP(samples$BUGSoutput$sims.list$alpha)
+  infer_beta[i] <- MAP(samples$BUGSoutput$sims.list$beta)
+
+  print(sprintf("sim %i complete", i))
+}
+
+par(mfrow = c(2,1))
+plot(infer_beta, true_beta)
+abline(0,1)
+plot(infer_alpha, true_alpha)
+abline(0,1)
+
+data.frame(infer_alpha = infer_alpha, true_alpha = true_alpha) %>% 
+  ggplot(aes(infer_alpha, true_alpha)) +
+    geom_point() +
+    geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+    theme_bw() +
+#    coord_cartesian(xlim = c(0, 3), ylim = c(0,3)) +
+    labs(title = 'Parameter recovery of alpha from choice kernel', x = 'Inferred alpha', y = 'True alpha')
+
+data.frame(infer_beta = infer_beta, true_beta = true_beta) %>% 
+  ggplot(aes(infer_beta, true_beta)) +
+    geom_point() +
+    geom_abline(slope = 1, intercept = 0, col = 'darkred', alpha = 0.3) +
+    theme_bw() +
+#    coord_cartesian(xlim = c(0, 3), ylim = c(0,3)) +
+    labs(title = 'Parameter recovery of beta from choice kernel', x = 'Inferred beta', y = 'True beta')
+
+
+```
+
+
+## Model Recovery
+```{r}
+n_sims <- 500
+n_trials <- 100
+
+DICs_rw_dat <- array(0, c(n_sims, 2))
+DICS_ck_dat <- array(0, c(n_sims, 2))
+
+for (i in 1:n_sims){
+  alpha <- runif(1,0,1)
+  beta <- rgamma(1,1,1)
+  
+  # run both models
+  rw_sims <- RW(payoff, n_trials, alpha, beta)
+  ck_sims <- choice_kernel(payoff, n_trials, alpha, beta)
+  
+  
+  ##### RW simulations, RW model
+  x <- rw_sims$x
+  r <- rw_sims$r
+  
+  data <- list("x", "r", "n_trials")
+  params <- c('alpha', 'beta')
+  
+  rw_d_rw_m <- jags.parallel(data, inits = NULL, params, 
+                           model.file='q_learning.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  
+  ##### RW simulations, CK model
+  rw_d_ck_m <- jags.parallel(data, inits = NULL, params, 
+                           model.file='choice_kernel.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  ######### CK simulations, RW model
+  x <- ck_sims$x
+  r <- ck_sims$r
+  
+  data <- list("x", "r", "n_trials")
+  params <- c('alpha', 'beta')
+  
+  ck_d_rw_m <- jags.parallel(data, inits = NULL, params, 
+                           model.file='q_learning.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  
+  ##### CK simulations, CK model
+  ck_d_ck_m <- jags.parallel(data, inits = NULL, params, 
+                           model.file='choice_kernel.txt', n.chains = 4,
+                           n.iter = 5000, n.burnin = 1000, n.thin = 1)
+  
+  
+  ### Filling DIC results array
+  DICs_rw_dat[i, 1] <- rw_d_rw_m$BUGSoutput$DIC
+  DICs_rw_dat[i, 2] <- rw_d_ck_m$BUGSoutput$DIC
+  
+  DICS_ck_dat[i, 1] <- ck_d_rw_m$BUGSoutput$DIC
+  DICS_ck_dat[i, 2] <- ck_d_ck_m$BUGSoutput$DIC
+  
+  print(sprintf("sim %i complete", i))
+
+}
+
+```
+
+
+```{r}
+### Create confusion matrix
+min_dic_rw_dat <- apply(data.frame(DICs_rw_dat), 1, which.min)
+min_dic_ck_dat <- apply(data.frame(DICS_ck_dat), 1, which.min)
+
+dic_df <- data.frame(predictions = c(min_dic_rw_dat, min_dic_ck_dat), true = c(rep('Q-learning', n_sims), rep('Choice kernel', n_sims))) %>% 
+  mutate(predictions = as.character(predictions)) %>%
+  mutate(predictions = recode(predictions, '1' = 'Q-learning', '2' = 'Choice kernel'))# %>% 
+
+devtools::install_github("ludvigolsen/cvms", ref="hparams_tuning")
+library(cvms)
+
+conf_mat <-  confusion_matrix(dic_df$true, dic_df$predictions)
+cf_mat <- conf_mat$`Confusion Matrix`[[1]]
+
+plot_confusion_matrix(cf_mat, add_row_percentages = F, add_col_percentages = T, add_normalized = T, counts_on_top = T) +
+  labs(x = "Data", y = "Model")
+
+```
+
+
+
+
+
+
+
+
