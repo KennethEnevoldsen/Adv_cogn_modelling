@@ -1,6 +1,6 @@
 model {
 
- for (a in n_agents){
+ for (a in 1:n_agents){
     delta[a] ~ dunif(0, 1)
     rho[a] ~   dunif(0, 1)
     phi[a] ~   dunif(0, 1)
@@ -10,8 +10,8 @@ model {
     n[a, 1] <- 1
     c[a, 1] ~ dunif(0, n_tokens)
     
-    for (tok in n_tokens){
-      A[a, 1, tok] <- 0
+    for (j in 1:n_tokens){
+      A[a, 1, j] <- 0
     }
  }
  
@@ -23,14 +23,16 @@ model {
     
     for (j in 1:n_tokens){
     
+      ttt[a, t, j] <- phi[a] * n[a, t-1]
+      tt[a, t, j] <- ttt[a, t, j] * A[a, t-1, j]
       A[a, t, j] <- (
       
-        (phi[a] * n[a, t-1] * A[a, t-1, j]) +
-        (delta[a] + ((1 - delta[a]) * (c_choice_index[n, t-1] == j))) *
-        ((((j + group_c[n, t-1]) * pi) / n_agents) -j)
+        tt[a, t, j] +
+        (delta[a] + ((1 - delta[a]) * (c_choice_index[a, t-1] == j))) *
+        ((((j + group_c[a, t-1]) * pi) / n_agents) - j)
         
         ) /
-        n[a,t]
+        n[a, t]
       
       exp_A[a, t, j] <- exp(lambda[a] * A[a, t, j])
       

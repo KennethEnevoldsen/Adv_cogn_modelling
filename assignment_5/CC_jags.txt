@@ -4,9 +4,9 @@ model {
  
  for (n in 1:n_agents) {
  
-  omega_1[n] ~ dnorm(0,1)T(0,1)
-  lambda[n] ~ dnorm(0,1)T(0,1)
-  gamma[n] ~ dnorm(0,1)T(0,1)
+  omega_1[n] ~ dnorm(0,1)T(0, 1)
+  lambda[n] ~ dnorm(0,1)T(0, 1)
+  gamma[n] ~ dnorm(0,1)T(0, 1)
   p_0[n] ~ dnorm(4, 0.2)T(0, max(vals))
   p_beta[n] ~ dnorm(0, 2)
   

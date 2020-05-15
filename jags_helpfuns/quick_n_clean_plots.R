@@ -212,15 +212,34 @@ plot_dens <- function(x, add_map = T, add_box = T, ci = 0.95, caption = T){
 #'@references
 #'
 #'@export
-plot_actual_predicted <- function(actual, predicted, pointrange_lower = NULL, pointrange_upper = NULL, pointrange_alpha = 0.2, add_rmse = T, add_r2 = T, caption = T){
+plot_actual_predicted <- function(actual, predicted, 
+                                  pointrange_lower = NULL, pointrange_upper = NULL, 
+                                  shape = NULL,
+                                  color = NULL,
+                                  pointrange_alpha = 0.2, 
+                                  add_rmse = T, add_r2 = T, caption = T){
   d <- data.frame(actual = actual, predicted = predicted)
   
   if (caption){
     c_text = paste("Dashed line indicate perfect prediction","\nMade using Quick 'n' Clean by K. Enevoldsen", sep = "")
   } else {c_text = ""}
   
+  if ((! is.null(color)) & (! is.null(shape))){ 
+    d$shape <- shape
+    d$color <- color
+    p <- ggplot2::ggplot(data = d, ggplot2::aes(x=actual, y=predicted, 
+                                                color=color, shape=shape))
+  } else if (! is.null(shape)){
+    d$shape <- shape
+    p <- ggplot2::ggplot(data = d, ggplot2::aes(x = actual, y = predicted, shape=shape))
+  } else if (! is.null(color)){ 
+    d$color <- color
+    p <- ggplot2::ggplot(data = d, ggplot2::aes(x = actual, y = predicted, color=color))
+  } else {
+    p <- ggplot2::ggplot(data = d, ggplot2::aes(x = actual, y = predicted))
+  }
   
-  p <- ggplot2::ggplot(data = d, ggplot2::aes(x = actual, y = predicted)) + 
+  p <- p + 
     ggplot2::geom_point(alpha = 0.5) +
     ggplot2::geom_abline(intercept = 0, slope = 1, linetype = "dashed") + 
     ggplot2::labs(title = ' ', y = 'Predicted', x = 'Actual', caption = c_text) + 
@@ -231,7 +250,8 @@ plot_actual_predicted <- function(actual, predicted, pointrange_lower = NULL, po
     e <- Metrics::rmse(d$actual, d$predicted)
     r2 <- cor(d$actual, d$predicted)^2
     # placement
-    yc <- min(predicted) + (max(predicted)-min(predicted))/8
+    yc1 <- min(predicted) + (max(predicted)-min(predicted))/7
+    yc2 <- min(predicted) + (max(predicted)-min(predicted))/10
     xc <- max(actual) - (max(actual)-min(actual))/8
     lab_text = c()
     if (add_rmse){
@@ -241,7 +261,7 @@ plot_actual_predicted <- function(actual, predicted, pointrange_lower = NULL, po
       lab_text = c(lab_text, paste0("R^2:", signif(r2, 2)))
     }
     p <- p + 
-      ggplot2::annotate("text", x = xc, y = c(yc, yc*0.85), label = lab_text, parse = T)
+      ggplot2::annotate("text", x = xc, y = c(yc1, yc2), label = lab_text, parse = T)
   }
   if (! (is.null(pointrange_lower) | is.null(pointrange_upper))){
     p <-  p + ggplot2::geom_pointrange(ggplot2::aes(x = actual,
