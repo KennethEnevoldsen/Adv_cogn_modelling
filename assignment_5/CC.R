@@ -72,7 +72,8 @@ CC <- function(n_agents, n_trials, vals, parameters) {
                   omega = omega,
                   parameters = parameters,
                   ga = ga, 
-                  vals = vals)
+                  vals = vals,
+                  start_params=parameters)
   return(results)
 }
 

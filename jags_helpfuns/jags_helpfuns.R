@@ -138,11 +138,12 @@ simulate_fit <- function(gen_fun, data_to_fit, model_filepath, params_to_save, s
     
     # fit each model to data
     for (i in 1:length(params_to_save)){
+      # cat("\nlength params to save: ", length(params_to_save))
       samples <- R2jags::jags.parallel(data = eval(parse(text = data_to_fit[[i]])), 
                                inits = NULL, 
                                parameters.to.save = params_to_save[[i]], 
                                model.file = model_filepath[[i]],
-                               n.chains = 4, n.iter = 5000, n.burnin = 1000)
+                               n.chains = 4, n.iter = 5000, n.burnin = 1000, n.thin = 2)
       res$DIC[i] <-  samples$BUGSoutput$DIC
       res$model_fitted_to_data[i] <- names(model_filepath[i])
       if (isTRUE(save_samples)){
@@ -150,6 +151,7 @@ simulate_fit <- function(gen_fun, data_to_fit, model_filepath, params_to_save, s
       }
     }
     res_l[[a]] <- res
+    rm(sim_dat)
   }
   
   res <- res_l %>% 

@@ -8,13 +8,17 @@ editor_options:
 ---
 
 ```{r}
-pacman::p_load(pacman, tidyverse, R2jags, modules)
+pacman::p_load(pacman, tidyverse, R2jags, patchwork)
 
 qc <- modules::import("../jags_helpfuns/quick_n_clean_plots", attach = T, doc = T)
 modules::reload(qc)
+jh <- modules::import("../jags_helpfuns/jags_helpfuns", attach = T, doc = T)
+modules::reload(jh)
 
-source("CC.R")
-source("EWA.R")
+source("../assignment_5/CC.R")
+source("../assignment_5/EWA.R")
+source("../jags_helpfuns/jags_helpfuns.R")
+source("../jags_helpfuns/quick_n_clean_plots.R")
 ```
 
 ```{r}
@@ -24,10 +28,11 @@ n_tokens <- 20
 pi <- 1.2
 
 dat_ewa <- EWA(n_agents, n_trials, n_tokens, pi, 
-           delta=runif(n_agents, 0.2, 0.4),
-           rho=runif(n_agents, 0.5, 0.9),
-           phi=runif(n_agents, 0.4, 0.8),
-           lambda=runif(n_agents, 0.8, 2))
+           delta=runif(3, 0.2, 0.4),
+           rho=runif(3, 0.2, 0.4),
+           phi=runif(3, 0.2, 0.4),
+           lambda=runif(3, 0.8, 2))
+
 dat_ewa$choice
 dat_ewa$internal_states$phi
 
@@ -46,7 +51,6 @@ dat_cc$parameters$p_beta
 ```
 
 ```{r jags}
-
 # EWA
 fit_ewa <- jags.parallel(data = list(n_agents=n_agents, 
                                  n_trials=n_trials, 
@@ -56,12 +60,18 @@ fit_ewa <- jags.parallel(data = list(n_agents=n_agents,
                                  pi=pi),
                      inits = NULL,
                      parameters.to.save = c("delta", "rho", "phi", "lambda"),
-                     n.chains = 4, n.iter = 3000, n.burnin = 1000,
-                     model.file = "EWL_jags.txt"
+                     n.chains = 4, n.iter = 4000, n.burnin = 1000, n.thin = 2, 
+                     model.file = "../assignment_5/EWA_jags.txt"
                      )
 fit_ewa
+p11 <- qc$plot_dens(fit_ewa$BUGSoutput$sims.list$phi[,1]) + 
+  geom_vline(xintercept = dat_ewa$start_params$phi[1], color = "firebrick")
+p22 <- qc$plot_dens(fit_ewa$BUGSoutput$sims.list$phi[,2]) + 
+  geom_vline(xintercept = dat_ewa$start_params$phi[2], color = "firebrick")
+p33 <- qc$plot_dens(fit_ewa$BUGSoutput$sims.list$phi[,3]) + 
+  geom_vline(xintercept = dat_ewa$start_params$phi[3], color = "firebrick")
 
-
+p11+p22+p33
 
 ## CC
 fit <- jags.parallel(data = list(n_agents=n_agents, 
@@ -91,7 +101,7 @@ $$
 
 ```{r}
 
-gen_fun = list(cc = "CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters = list(
+gen_fun1 = list(cc = "CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters = list(
                                                                   gb_1 = round(runif(n_agents, 1, 20), 0),
                                                                   omega_1 = runif(n_agents, 0, 1),
                                                                   lambda = runif(n_agents, 0, 0.5),
@@ -100,33 +110,191 @@ gen_fun = list(cc = "CC(n_agents, n_trials, vals=seq(1, 20, 1), parameters = lis
                                                                   p_beta = runif(n_agents, 0, 1)
                                                                   ))",
                ewa = "EWA(n_agents, n_trials, n_tokens, pi, 
-                           delta=runif(n_agents, 0.2, 0.4),
-                           rho=runif(n_agents, 0.5, 0.9),
-                           phi=runif(n_agents, 0.4, 0.8),
-                           lambda=runif(n_agents, 0.8, 2))") 
-params_to_save = list(cc = c("omega_1", "lambda", "gamma", "p_0", "p_beta", "omega", "c"),
+                           delta=runif(n_agents, 0.1, 0.9),
+                           rho=runif(n_agents, 0.1, 0.9),
+                           phi=runif(n_agents, 0.1, 0.9),
+                           lambda=runif(n_agents, 0.8, 1.5))") 
+params_to_save1 = list(cc = c("omega_1", "lambda", "gamma", "p_0", "p_beta", "omega", "c"),
                       ewa = c("delta", "rho", "phi", "lambda"))
-model_filepath = list(cc = "CC_jags.txt",
-                      ewa = "EWL_jags.txt")
+model_filepath1 = list(cc = "CC_jags.txt",
+                      ewa = "../assignment_5/EWA_jags.txt")
 
-data_to_fit = list(cc = "list(n_agents=n_agents,
+data_to_fit1 = list(cc = "list(n_agents=n_agents,
                                  n_trials=n_trials, 
                                  ga=sim_dat$ga,
                                  c=sim_dat$c,
                                  vals=sim_dat$vals)",
                    ewa = "list(n_agents=n_agents, 
                                  n_trials=n_trials, 
-                                 ga=sim_dat$ga,
-                                 c=sim_dat$c,
-                                 vals=sim_dat$vals)")
+                                 n_tokens=n_tokens,
+                                 c=sim_dat$choice,
+                                 c_actual=sim_dat$choice,
+                                 pi=pi)")
 
-res <- jh$simulate_fit(gen_fun, data_to_fit, model_filepath, params_to_save, save_samples = T, n_sim = 100)
-saveRDS(res, "n_sim_100.rds")
+res_cc <- jh$simulate_fit(gen_fun[1], data_to_fit[1], model_filepath[1], params_to_save[1], save_samples = T, 
+                          n_sim = 100)
+saveRDS(res_cc, "cc_n_sim_100.rds")
+# res_cc <- readRDS("cc_n_sim_100.rds")
 
+res_ewa <- simulate_fit(gen_fun1[2], data_to_fit1[2], model_filepath1[2], params_to_save1[2], 
+                           save_samples = T, 
+                           n_sim = 100)
+res_ewa$samples[[1]]
+dat_ewa$start_params
+sim=1
+p1 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,1]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[1], color = "firebrick")
+p2 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,2]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[2], color = "firebrick")
+p3 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,3]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[3], color = "firebrick")
+sim = 2
+p4 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,1]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[1], color = "firebrick")
+p5 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,2]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[2], color = "firebrick")
+p6 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,3]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[3], color = "firebrick")
+sim = 3
+p7 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,1]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[1], color = "firebrick")
+p8 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,2]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[2], color = "firebrick")
+p9 <- plot_dens(res_ewa$samples[[sim]]$BUGSoutput$sims.list$phi[,3]) + 
+  geom_vline(xintercept = res_ewa$true_params[[sim]]$phi[3], color = "firebrick")
+
+p1 + p2 + p3
+(p1+p2+p3) / (p4+p5+p6) / (p7 + p8 + p9)
+# saveRDS(res_ewa, "ewa_n_sim_100.rds")
+# res_ewa <- readRDS("ewa_n_sim_100.rds")
+```
+
+```{r plotting}
+
+samples = res_cc$samples[[1]]
+samples$BUGSoutput$sims.list$p_0[,1]
+res_cc %>% select(-samples) %>% View()
+
+c("omega_1", "lambda", "gamma", "p_0", "p_beta")
+res_cc$true_params[[1]]
+c("delta", "rho", "phi", "lambda")
+
+### parameter recovery
+get_truth_and_estimated <- function(res, parameters, n_agents=n_agents,
+                                    ci = 0.89, remove_col = c("samples", "DIC", "true_params")){
+
+  # get map
+  for (parameter in parameters){
+    for (a in 1:n_agents){
+      res[[paste(parameter, a, "map", sep = "_")]] <- sapply(res$samples,  function(x)
+                                                          jh$jag_map(x$BUGSoutput$sims.list[[parameter]][, a]) )
+            # get CI
+      res[[paste(parameter, a, "ci_low", sep = "_")]]  <- sapply(res$samples,  function(x)
+                  bayestestR::ci(x$BUGSoutput$sims.list[[parameter]][, a], ci = ci, method = "HDI")$CI_low)
+      res[[paste(parameter, a, "ci_high", sep = "_")]] <- sapply(res$samples,  function(x)
+                  bayestestR::ci(x$BUGSoutput$sims.list[[parameter]][, a], ci = ci, method = "HDI")$CI_high)
+    
+      res[[paste(parameter, a, "true", sep = "_")]] <- sapply(res$true_params,  function(x) x[[parameter]][a] )
+    }
+  }
+  
+  if (length(remove_col)>=1){
+    remove_col = colnames(res)[colnames(res) %in% remove_col]
+    res <- res %>% select(-remove_col)
+  }
+  return(res)
+}
+
+res_cc = get_truth_and_estimated(res_cc, parameters = c("omega_1", "lambda", "gamma", "p_0", "p_beta"),
+                        n_agents=n_agents, ci = 0.89, remove_col = c("samples", "DIC", "true_params"))
+
+plot_cc <- res_cc %>% 
+  pivot_longer(cols = omega_1_1_map:p_beta_3_true,
+               names_to = c("type", "agent", "type2"),
+               names_pattern = "(.*)_(\\d{1})_(\\D*)",
+               values_to = "val"
+               ) %>% 
+  pivot_wider(id_cols = model_generating_the_data:agent,
+              names_from=type2,
+              values_from=val)
+
+
+unique(plot_cc$type)
+for (var in c("p_beta", "lambda", "gamma", "p_0")){
+  p <- qc$plot_actual_predicted(actual = plot_cc$true[plot_cc$type == var], 
+                           predicted = plot_cc$map[plot_cc$type == var],
+                           pointrange_lower = plot_cc$ci_low[plot_cc$type == var],
+                           pointrange_upper = plot_cc$ci_high[plot_cc$type == var],
+                           shape = plot_cc$agent[plot_cc$type == var],
+                           color = plot_cc$agent[plot_cc$type == var],
+                           caption = F) + 
+    theme(text = element_text(size=18)) + 
+    labs(shape = "Agent", color = "Agent")
+  ggsave(paste(var, ".png", sep = ""), plot = p)
+}
+
+
+res_cc <- readRDS("cc_n_sim_100.rds")
+p <- qc$plot_dens(res_cc$samples[[1]]$BUGSoutput$sims.list$lambda[,1], 
+                  caption = F, 
+                  ci = 0.89) + 
+  theme(text = element_text(size=18))
+ggsave("example_lambda_dist.png", plot = p)
+
+
+
+ # EWA
+plot_ewa <- get_truth_and_estimated(res_ewa, 
+                                 parameters = c("delta", "lambda", 
+                                                "rho", "phi"),
+                        n_agents=n_agents, ci = 0.89, 
+                        remove_col = c("samples", "DIC", "true_params")
+                        )
+
+plot_ewa <- plot_ewa %>% 
+  pivot_longer(cols = delta_1_map:phi_3_true,
+               names_to = c("type", "agent", "type2"),
+               names_pattern = "(.*)_(\\d{1})_(\\D*)",
+               values_to = "val"
+               ) %>% 
+  pivot_wider(id_cols = model_generating_the_data:agent,
+              names_from=type2,
+              values_from=val)
+
+plot_ewa %>% filter(type == "phi") %>% View()
+
+for (var in c("delta", "lambda", "rho", "phi")){
+  p <- qc$plot_actual_predicted(actual = plot_ewa$true[plot_ewa$type == var], 
+                           predicted = plot_ewa$map[plot_ewa$type == var],
+                           pointrange_lower = plot_ewa$ci_low[plot_ewa$type == var],
+                           pointrange_upper = plot_ewa$ci_high[plot_ewa$type == var],
+                           shape = plot_ewa$agent[plot_ewa$type == var],
+                           color = plot_ewa$agent[plot_ewa$type == var],
+                           caption = F) + 
+    theme(text = element_text(size=18)) + 
+    labs(shape = "Agent", color = "Agent")
+  ggsave(paste("ewa_", var, ".png", sep = ""), plot = p)
+}
+```
+
+
+```{r}
+x <- seq(0, 1, by = 0.001)
+y <- dbeta(x, 2,2)
+plot(x, y, "l")
 ```
 
 
 
+
+```{r}
+4 - (0.45)*-4
+5.8 - (0.45)*-4
+7.6 - (0.45)*-4
+
+
+
+```
 
 
 

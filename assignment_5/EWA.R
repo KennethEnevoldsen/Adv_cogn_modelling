@@ -44,11 +44,13 @@ EWA <- function(n_agents=100, n_trials=20, n_tokens=20, pi, delta, rho, phi, lam
   }
 
   internal_states=list(delta=delta, rho=rho, phi=phi, lambda=lambda)
-  res <- list(choice=c, n=n, prob=p, pi=pi, internal_states=internal_states)
+  res <- list(choice=c, n=n, prob=p, pi=pi, internal_states=internal_states,
+              start_params=internal_states)
   return(res)
 }
 
 
 # test:
-# EWA(n_agents=100, n_trials=20, n_tokens=20, pi=1.5, delta=runif(100, 0.2, 0.4), rho=runif(100, 0.2, 0.4), phi=runif(100, 0.2, 0.4), lambda=runif(100, 0.8, 2))
+res <- EWA(n_agents=3, n_trials=15, n_tokens=20, pi=1.2, delta=runif(3, 0.2, 0.4), rho=runif(3, 0.2, 0.4), phi=runif(3, 0.2, 0.4), lambda=runif(3, 0.8, 2))
+res$choice
 # n_agents=100; n_trials=20; n_tokens=20; pi=1.5; delta=runif(100, 0.2, 0.4); rho=runif(100, 0.2, 0.4); phi=runif(100, 0.2, 0.4); lambda=runif(100, 0.8, 2)
